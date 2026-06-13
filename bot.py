@@ -142,7 +142,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error generando respuesta: {e}")
-        await update.message.reply_text("Lo siento Jefe, hubo un error de procesamiento.")
+        await update.message.reply_text(f"Lo siento Jefe, hubo un error de procesamiento. Detalle técnico: {str(e)}")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Procesa las imágenes que envía el usuario."""
@@ -170,7 +170,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error con imagen: {e}")
-        await update.message.reply_text("Mis sensores ópticos fallaron. No pude procesar la imagen, Señor.")
+        await update.message.reply_text(f"Mis sensores ópticos fallaron. Detalle técnico: {str(e)}")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Procesa notas de voz y responde con voz generada por Edge-TTS."""
@@ -208,7 +208,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error con nota de voz: {e}")
-        await update.message.reply_text("Mis receptores de audio experimentaron un fallo, Jefe.")
+        await update.message.reply_text(f"Mis receptores de audio experimentaron un fallo. Detalle técnico: {str(e)}")
 
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Procesa documentos PDF."""
@@ -239,7 +239,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error con PDF: {e}")
-        await update.message.reply_text("Hubo una interrupción al analizar el documento, Señor.")
+        await update.message.reply_text(f"Hubo una interrupción al analizar el documento. Detalle técnico: {str(e)}")
 
 async def check_reminders_job(context: ContextTypes.DEFAULT_TYPE):
     """Trabajo en segundo plano que revisa alarmas cada 10 segundos."""
