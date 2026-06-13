@@ -1,0 +1,15 @@
+# Entornos virtuales
+venv/
+env/
+.env
+
+# Base de datos
+*.db
+*.sqlite3
+
+# Archivos temporales y cachés
+__pycache__/
+*.pyc
+.pytest_cache/
+*.mp3
+*.ogg
