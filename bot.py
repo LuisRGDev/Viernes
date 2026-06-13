@@ -145,7 +145,7 @@ chat_sessions = {}
 def get_chat_session(user_id):
     """Obtiene o crea una sesión de chat para un usuario con personalidad de F.R.I.D.A.Y."""
     if user_id not in chat_sessions:
-        model = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
+        model = genai.GenerativeModel('gemini-flash-latest', tools=tools)
         chat_sessions[user_id] = model.start_chat(
             enable_automatic_function_calling=True,
             history=[
