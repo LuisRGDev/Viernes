@@ -11,6 +11,10 @@ from duckduckgo_search import DDGS
 import edge_tts
 from flask import Flask
 import threading
+from youtube_transcript_api import YouTubeTranscriptApi
+from bs4 import BeautifulSoup
+import requests
+import urllib.parse
 
 import db
 
@@ -86,8 +90,54 @@ def search_web(query: str) -> str:
         logger.error(f"Error en búsqueda web: {e}")
         return "Problema de conexión con la red global."
 
+def generate_image_url(prompt: str) -> str:
+    """Genera una imagen a partir de un texto. Úsala siempre que el usuario pida dibujar, crear o generar una imagen o foto.
+    Esta función devuelve una URL de la imagen generada.
+    IMPORTANTE: Debes responder al usuario enviando ESTRICTAMENTE la URL devuelta para que Telegram muestre la imagen."""
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?nologo=true"
+    return f"Aquí tienes la URL de la imagen generada, envíasela al usuario: {url}"
+
+def get_youtube_transcript(video_url: str) -> str:
+    """Obtiene los subtítulos o transcripción de un video de YouTube para poder resumirlo. Úsala cuando el usuario te pida resumir un video de YouTube."""
+    try:
+        if "v=" in video_url:
+            video_id = video_url.split("v=")[1][:11]
+        elif "youtu.be/" in video_url:
+            video_id = video_url.split("youtu.be/")[1][:11]
+        else:
+            return "Error: No pude identificar el ID del video de YouTube."
+            
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        # Buscar español primero, luego inglés, o auto-generados
+        try:
+            transcript = transcript_list.find_transcript(['es', 'en'])
+        except:
+            transcript = transcript_list.find_generated_transcript(['es', 'en'])
+            
+        data = transcript.fetch()
+        text = " ".join([item['text'] for item in data])
+        return f"Transcripción del video:\n\n{text[:15000]}"
+    except Exception as e:
+        return f"No se pudo obtener la transcripción: {e}"
+
+def scrape_website(url: str) -> str:
+    """Lee el texto principal de una página web o artículo. Úsala cuando el usuario te envíe un enlace web y te pida que lo leas o lo resumas."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        for script in soup(["script", "style", "nav", "footer"]):
+            script.extract()
+            
+        text = soup.get_text(separator=' ', strip=True)
+        return f"Contenido de la web:\n\n{text[:15000]}"
+    except Exception as e:
+        return f"Error leyendo la página web: {e}"
+
 # Herramientas a proporcionar al modelo
-tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web]
+tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, generate_image_url, get_youtube_transcript, scrape_website]
 
 # Diccionario para guardar el contexto de los chats por ID de usuario
 chat_sessions = {}
@@ -101,7 +151,7 @@ def get_chat_session(user_id):
             history=[
                 {
                     "role": "user",
-                    "parts": ["Adopta la personalidad de F.R.I.D.A.Y. Eres mi asistente personal. Llámame 'Jefe' o 'Señor', pero mantén un tono casual, ágil y directo. No seas robóticamente formal ni demasiado ceremoniosa. Ve siempre directo al grano. NUNCA menciones que has recibido mis audios, imágenes o mensajes, simplemente responde a ellos directamente como si estuviéramos conversando cara a cara. Tienes base de datos, alarmas y acceso a Internet."]
+                    "parts": ["Adopta la personalidad de F.R.I.D.A.Y. Eres mi asistente personal. Llámame 'Jefe' o 'Señor', pero mantén un tono casual, ágil y directo. No seas robóticamente formal ni demasiado ceremoniosa. Ve siempre directo al grano. NUNCA menciones que has recibido mis audios, imágenes o mensajes, simplemente responde a ellos directamente como si estuviéramos conversando cara a cara. Tienes base de datos, alarmas, acceso a Internet, puedes dibujar imágenes, leer videos de YouTube y leer páginas web."]
                 },
                 {
                     "role": "model",
