@@ -9,6 +9,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 import contextvars
 from duckduckgo_search import DDGS
 import edge_tts
+from flask import Flask
+import threading
 
 import db
 
@@ -252,8 +254,26 @@ async def check_reminders_job(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error enviando recordatorio a {user_id}: {e}")
 
+# --- MINI SERVIDOR WEB PARA RENDER ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "F.R.I.D.A.Y. está en línea y operando a capacidad óptima."
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    # Desactivar logs de Flask para no ensuciar la consola
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    app.run(host="0.0.0.0", port=port)
+
 def main():
     """Inicia el bot."""
+    # Iniciar servidor web en un hilo secundario para mantener a Render feliz
+    threading.Thread(target=run_web_server, daemon=True).start()
+
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Comandos y Manejadores
