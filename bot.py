@@ -1,6 +1,7 @@
 import os
 import logging
 import tempfile
+import html
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -247,12 +248,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
             temp_path = f.name
         
-        # Usamos SSML para afinar el tono: más calmado (-8%), tono ligeramente bajo (-5Hz)
-        # NuriaNeural tiene timbre claro y preciso, lo más cercano al estilo de IA de la película
+        # Escapar caracteres especiales XML antes de insertar en SSML
+        texto_seguro = html.escape(response.text)
         ssml_text = (
             f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="es-MX">'
             f'<voice name="es-MX-NuriaNeural">'
-            f'<prosody rate="-8%" pitch="-5Hz">{response.text}</prosody>'
+            f'<prosody rate="-8%" pitch="-5Hz">{texto_seguro}</prosody>'
             f'</voice></speak>'
         )
         communicate = edge_tts.Communicate(ssml_text, "es-MX-NuriaNeural")
@@ -383,10 +384,12 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
                     temp_path = f.name
                 
+                # Escapar caracteres especiales XML antes de insertar en SSML
+                texto_seguro_briefing = html.escape(texto_briefing)
                 ssml_text = (
                     f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="es-MX">'
                     f'<voice name="es-MX-NuriaNeural">'
-                    f'<prosody rate="-8%" pitch="-5Hz">{texto_briefing}</prosody>'
+                    f'<prosody rate="-8%" pitch="-5Hz">{texto_seguro_briefing}</prosody>'
                     f'</voice></speak>'
                 )
                 communicate = edge_tts.Communicate(ssml_text, "es-MX-NuriaNeural")
