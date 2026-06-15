@@ -243,11 +243,19 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = "Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
         response = chat.send_message([prompt, audio_part])
         
-        # Generar audio con edge-tts (Voz Femenina Mexicana - Dalia)
+        # Generar audio con edge-tts (Voz F.R.I.D.A.Y. - Estilo película: clara, calmada, ligeramente mecanizada)
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
             temp_path = f.name
         
-        communicate = edge_tts.Communicate(response.text, "es-MX-DaliaNeural")
+        # Usamos SSML para afinar el tono: más calmado (-8%), tono ligeramente bajo (-5Hz)
+        # NuriaNeural tiene timbre claro y preciso, lo más cercano al estilo de IA de la película
+        ssml_text = (
+            f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="es-MX">'
+            f'<voice name="es-MX-NuriaNeural">'
+            f'<prosody rate="-8%" pitch="-5Hz">{response.text}</prosody>'
+            f'</voice></speak>'
+        )
+        communicate = edge_tts.Communicate(ssml_text, "es-MX-NuriaNeural")
         await communicate.save(temp_path)
         
         # Enviar respuesta de voz
