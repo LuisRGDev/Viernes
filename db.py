@@ -26,6 +26,14 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS briefing_config (
+            user_id INTEGER PRIMARY KEY,
+            hour INTEGER NOT NULL,
+            minute INTEGER NOT NULL,
+            timezone_offset INTEGER DEFAULT -6
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -77,6 +85,34 @@ def mark_reminder_sent(reminder_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("UPDATE reminders SET status = 'sent' WHERE id = ?", (reminder_id,))
+    conn.commit()
+    conn.close()
+
+def set_briefing(user_id, hour, minute, timezone_offset=-6):
+    """Guarda o actualiza la configuración del briefing para un usuario."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR REPLACE INTO briefing_config (user_id, hour, minute, timezone_offset) VALUES (?, ?, ?, ?)",
+        (user_id, hour, minute, timezone_offset)
+    )
+    conn.commit()
+    conn.close()
+
+def get_all_briefings():
+    """Obtiene todos los usuarios con briefing configurado."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT user_id, hour, minute, timezone_offset FROM briefing_config")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_briefing(user_id):
+    """Elimina la configuración de briefing de un usuario."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM briefing_config WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 

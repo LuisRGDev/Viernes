@@ -312,6 +312,99 @@ async def check_reminders_job(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error enviando recordatorio a {user_id}: {e}")
 
+async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Configura el briefing matutino. Uso: /briefing HH:MM o /briefing off"""
+    user_id = update.effective_user.id
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "⌚ **Configuración de Briefing Matutino**\n\n"
+            "Para activarlo: `/briefing 08:00`\n"
+            "Para desactivarlo: `/briefing off`\n\n"
+            "_F.R.I.D.A.Y. te enviará un audio con las noticias del día, el clima y tus tareas pendientes cada mañana a la hora que elijas._",
+            parse_mode='Markdown'
+        )
+        return
+
+    if args[0].lower() == 'off':
+        db.delete_briefing(user_id)
+        await update.message.reply_text("❌ Briefing matutino desactivado. Cuando quieras reactivarlo, usa `/briefing HH:MM`.", parse_mode='Markdown')
+        return
+
+    try:
+        hour, minute = map(int, args[0].split(':'))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+        db.set_briefing(user_id, hour, minute, timezone_offset=-6)
+        await update.message.reply_text(
+            f"✅ Briefing matutino configurado para las **{hour:02d}:{minute:02d}** (hora de México / UTC-6).\n\n"
+            "Mañana a esa hora recibirás tu primer informe de situación, Jefe.",
+            parse_mode='Markdown'
+        )
+    except (ValueError, AttributeError):
+        await update.message.reply_text("Formato inválido. Usa `/briefing 08:00` (hora en formato 24h).", parse_mode='Markdown')
+
+async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
+    """Revisa cada minuto si algún usuario tiene briefing programado para ahora."""
+    from datetime import timezone, timedelta
+    users = db.get_all_briefings()
+    
+    for user_id, hour, minute, tz_offset in users:
+        # Calcular hora local del usuario
+        user_tz = timezone(timedelta(hours=tz_offset))
+        now_local = datetime.now(user_tz)
+        
+        # Disparar si coincide la hora y el minuto exactos
+        if now_local.hour == hour and now_local.minute == minute:
+            try:
+                logger.info(f"Enviando briefing a usuario {user_id}")
+                
+                # Buscar noticias y clima en una sola llamada combinada
+                noticias = search_web("noticias más importantes del mundo hoy")
+                tareas = db.list_tasks(user_id)
+                lista_tareas = "\n".join([f"- {t[1]}" for t in tareas]) if tareas else "No tienes tareas pendientes."
+                
+                # Construir el prompt del briefing
+                prompt_briefing = (
+                    f"Eres F.R.I.D.A.Y. Dale al usuario su briefing matutino en estilo conciso y profesional. "
+                    f"Saluda brevemente mencionando que es el informe de la mañana. "
+                    f"Luego presenta:\n"
+                    f"1. Un resumen muy corto de las 3 noticias más importantes basadas en esta información: {noticias[:3000]}\n"
+                    f"2. Sus tareas pendientes del día: {lista_tareas}\n"
+                    f"Mantén el tono de F.R.I.D.A.Y.: eficiente, directo y con carácter. Máximo 200 palabras."
+                )
+                
+                model = genai.GenerativeModel('gemini-flash-latest')
+                response = model.generate_content(prompt_briefing)
+                texto_briefing = response.text
+                
+                # Generar audio
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                    temp_path = f.name
+                
+                ssml_text = (
+                    f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="es-MX">'
+                    f'<voice name="es-MX-NuriaNeural">'
+                    f'<prosody rate="-8%" pitch="-5Hz">{texto_briefing}</prosody>'
+                    f'</voice></speak>'
+                )
+                communicate = edge_tts.Communicate(ssml_text, "es-MX-NuriaNeural")
+                await communicate.save(temp_path)
+                
+                # Enviar el audio del briefing
+                with open(temp_path, 'rb') as audio:
+                    await context.bot.send_voice(chat_id=user_id, voice=audio, caption="🌅 **Informe Matutino de F.R.I.D.A.Y.**", parse_mode='Markdown')
+                
+                os.remove(temp_path)
+                
+            except Exception as e:
+                logger.error(f"Error en briefing para {user_id}: {e}")
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=f"🌅 Error al generar el briefing de hoy: {str(e)}")
+                except:
+                    pass
+
 # --- MINI SERVIDOR WEB PARA RENDER ---
 app = Flask(__name__)
 
@@ -336,6 +429,7 @@ def main():
 
     # Comandos y Manejadores
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("briefing", briefing_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
@@ -343,8 +437,10 @@ def main():
 
     # JobQueue: Revisar recordatorios cada 10 segundos
     application.job_queue.run_repeating(check_reminders_job, interval=10, first=5)
+    # JobQueue: Revisar briefings cada 60 segundos (con margen de 1 minuto)
+    application.job_queue.run_repeating(send_morning_briefing, interval=60, first=10)
 
-    logger.info("Iniciando a F.R.I.D.A.Y. con soporte de Voz, PDF, Búsqueda Web, BD y Alarmas...")
+    logger.info("Iniciando a F.R.I.D.A.Y. con soporte de Voz, PDF, Búsqueda Web, BD, Alarmas y Briefing Matutino...")
     application.run_polling()
 
 if __name__ == '__main__':
