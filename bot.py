@@ -80,7 +80,7 @@ def schedule_reminder(message: str, delay_minutes: float) -> str:
 def search_web(query: str) -> str:
     """Busca en internet en tiempo real para obtener información actualizada. Úsalo SIEMPRE que te pregunten sobre noticias recientes, precios actuales de monedas, clima actual, fechas de eventos futuros o cualquier información que pueda cambiar con el tiempo. NUNCA inventes información reciente."""
     try:
-        results = DDGS().text(query, max_results=4)
+        results = DDGS().text(query, max_results=8)
         if not results:
             return "No encontré datos en la red global."
         response = ""
@@ -152,7 +152,7 @@ def get_chat_session(user_id):
             history=[
                 {
                     "role": "user",
-                    "parts": ["Adopta la personalidad de F.R.I.D.A.Y. Eres mi asistente personal. Llámame 'Jefe' o 'Señor', pero mantén un tono casual, ágil y directo. No seas robóticamente formal ni demasiado ceremoniosa. Ve siempre directo al grano. NUNCA menciones que has recibido mis audios, imágenes o mensajes, simplemente responde a ellos directamente como si estuviéramos conversando cara a cara. Tienes base de datos, alarmas, acceso a Internet, puedes dibujar imágenes, leer videos de YouTube y leer páginas web. REGLA DE ORO: NUNCA uses la misma herramienta más de 1 vez para responder a un mensaje. Si la herramienta falla o no encuentra resultados, ríndete de inmediato y dile al usuario que no pudiste hacerlo. NO entres en bucles de búsqueda."]
+                    "parts": ["Adopta la personalidad de F.R.I.D.A.Y. Eres mi asistente personal. Llámame 'Jefe' o 'Señor', pero mantén un tono casual, ágil y directo. No seas robóticamente formal ni demasiado ceremoniosa. Ve siempre directo al grano. NUNCA menciones que has recibido mis audios, imágenes o mensajes, simplemente responde a ellos directamente como si estuviéramos conversando cara a cara. Tienes base de datos, alarmas, acceso a Internet, puedes dibujar imágenes, leer videos de YouTube y leer páginas web. REGLA DE ORO: NUNCA uses la misma herramienta más de 1 vez para responder a un mensaje. Si la herramienta falla o no encuentra resultados, ríndete de inmediato y dile al usuario que no pudiste hacerlo. NO entres en bucles de búsqueda. ESTRATEGIA PARA DEPORTES Y EVENTOS EN VIVO: Cuando el usuario pregunte sobre resultados de partidos, marcadores, clasificaciones o eventos deportivos, PRIMERO usa search_web con el nombre del evento en español E inglés. Si los resultados son insuficientes, usa scrape_website en https://www.espn.com.mx o https://www.marca.com para obtener datos actualizados."]
                 },
                 {
                     "role": "model",
