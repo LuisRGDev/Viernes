@@ -343,6 +343,12 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
     from datetime import timezone, timedelta
     users = db.get_all_briefings()
     
+    # Log de diagnóstico: confirma que el job está corriendo
+    from datetime import timezone as tz_module
+    now_utc = datetime.now(tz_module.utc)
+    now_mx = datetime.now(timezone(timedelta(hours=-6)))
+    logger.info(f"[BRIEFING CHECK] UTC={now_utc.strftime('%H:%M')} | MX(UTC-6)={now_mx.strftime('%H:%M')} | Usuarios configurados: {len(users)}")
+    
     for user_id, hour, minute, tz_offset in users:
         # Calcular hora local del usuario
         user_tz = timezone(timedelta(hours=tz_offset))
