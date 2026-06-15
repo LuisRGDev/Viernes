@@ -244,19 +244,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = "Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
         response = chat.send_message([prompt, audio_part])
         
-        # Generar audio con edge-tts (Voz F.R.I.D.A.Y. - Estilo película: clara, calmada, ligeramente mecanizada)
+        # Generar audio con edge-tts (texto plano, voz NuriaNeural estilo FRIDAY)
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
             temp_path = f.name
         
-        # Escapar caracteres especiales XML antes de insertar en SSML
-        texto_seguro = html.escape(response.text)
-        ssml_text = (
-            f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="es-MX">'
-            f'<voice name="es-MX-NuriaNeural">'
-            f'<prosody rate="-8%" pitch="-5Hz">{texto_seguro}</prosody>'
-            f'</voice></speak>'
-        )
-        communicate = edge_tts.Communicate(ssml_text, "es-MX-NuriaNeural")
+        communicate = edge_tts.Communicate(response.text, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
         await communicate.save(temp_path)
         
         # Enviar respuesta de voz
@@ -380,19 +372,11 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                 response = model.generate_content(prompt_briefing)
                 texto_briefing = response.text
                 
-                # Generar audio
+                # Generar audio (texto plano, sin SSML para mayor compatibilidad)
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
                     temp_path = f.name
                 
-                # Escapar caracteres especiales XML antes de insertar en SSML
-                texto_seguro_briefing = html.escape(texto_briefing)
-                ssml_text = (
-                    f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="es-MX">'
-                    f'<voice name="es-MX-NuriaNeural">'
-                    f'<prosody rate="-8%" pitch="-5Hz">{texto_seguro_briefing}</prosody>'
-                    f'</voice></speak>'
-                )
-                communicate = edge_tts.Communicate(ssml_text, "es-MX-NuriaNeural")
+                communicate = edge_tts.Communicate(texto_briefing, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
                 await communicate.save(temp_path)
                 
                 # Enviar el audio del briefing
