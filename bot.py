@@ -377,49 +377,67 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
         
         # Disparar si coincide la hora y el minuto exactos
         if now_local.hour == hour and now_local.minute == minute:
+            logger.info(f"[BRIEFING] Disparando briefing para usuario {user_id}")
+            texto_briefing = None
             try:
-                logger.info(f"Enviando briefing a usuario {user_id}")
-                
-                # Buscar noticias y clima en una sola llamada combinada
-                noticias = search_web("noticias más importantes del mundo hoy")
+                # Step 1: Buscar noticias
+                logger.info("[BRIEFING] Step 1: buscando noticias...")
+                try:
+                    noticias = search_web("noticias mas importantes del mundo hoy")
+                    logger.info("[BRIEFING] Step 1 OK")
+                except Exception as e_search:
+                    logger.warning(f"[BRIEFING] Busqueda fallo: {e_search}. Sin noticias.")
+                    noticias = "No fue posible obtener noticias en este momento."
+
+                # Step 2: Obtener tareas
+                logger.info("[BRIEFING] Step 2: obteniendo tareas...")
                 tareas = db.list_tasks(user_id)
-                lista_tareas = "\n".join([f"- {t[1]}" for t in tareas]) if tareas else "No tienes tareas pendientes."
-                
-                # Construir el prompt del briefing
+                lista_tareas = ", ".join([t[1] for t in tareas]) if tareas else "Sin tareas pendientes."
+                logger.info(f"[BRIEFING] Step 2 OK: {len(tareas)} tareas")
+
+                # Step 3: Generar texto con Gemini (sin markdown)
+                logger.info("[BRIEFING] Step 3: generando texto con Gemini...")
                 prompt_briefing = (
-                    f"Eres F.R.I.D.A.Y. Dale al usuario su briefing matutino en estilo conciso y profesional. "
-                    f"Saluda brevemente mencionando que es el informe de la mañana. "
-                    f"Luego presenta:\n"
-                    f"1. Un resumen muy corto de las 3 noticias más importantes basadas en esta información: {noticias[:3000]}\n"
-                    f"2. Sus tareas pendientes del día: {lista_tareas}\n"
-                    f"Mantén el tono de F.R.I.D.A.Y.: eficiente, directo y con carácter. Máximo 200 palabras."
+                    f"Eres F.R.I.D.A.Y. Da el briefing matutino. "
+                    f"Usa SOLO texto plano, sin asteriscos, sin negritas, sin emojis, sin guiones. "
+                    f"Resume en 3 frases cortas las noticias: {noticias[:1500]}. "
+                    f"Menciona las tareas del dia: {lista_tareas}. Maximo 120 palabras."
                 )
-                
                 model = genai.GenerativeModel('gemini-flash-latest')
                 response = model.generate_content(prompt_briefing)
                 texto_briefing = response.text
-                
-                # Limpiar markdown y generar audio
+                logger.info(f"[BRIEFING] Step 3 OK: {len(texto_briefing)} chars")
+
+                # Step 4: Generar y enviar audio
+                logger.info(f"[BRIEFING] Step 4: TTS con texto: {texto_briefing[:80]}")
+                texto_limpio_briefing = clean_for_tts(texto_briefing)
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
                     temp_path = f.name
-                
-                texto_limpio_briefing = clean_for_tts(texto_briefing)
-                logger.info(f"[TTS BRIEFING] Texto a convertir ({len(texto_limpio_briefing)} chars): {texto_limpio_briefing[:100]}")
                 communicate = edge_tts.Communicate(texto_limpio_briefing, "es-MX-NuriaNeural")
                 await communicate.save(temp_path)
-                
-                # Enviar el audio del briefing
+                logger.info("[BRIEFING] Step 4 OK: audio generado")
                 with open(temp_path, 'rb') as audio:
-                    await context.bot.send_voice(chat_id=user_id, voice=audio, caption="🌅 **Informe Matutino de F.R.I.D.A.Y.**", parse_mode='Markdown')
-                
+                    await context.bot.send_voice(chat_id=user_id, voice=audio, caption="Informe Matutino de F.R.I.D.A.Y.")
                 os.remove(temp_path)
-                
+                logger.info(f"[BRIEFING] Enviado exitosamente a {user_id}")
+
             except Exception as e:
-                logger.error(f"Error en briefing para {user_id}: {e}")
-                try:
-                    await context.bot.send_message(chat_id=user_id, text=f"🌅 Error al generar el briefing de hoy: {str(e)}")
-                except:
-                    pass
+                logger.error(f"[BRIEFING] Error en step: {e}")
+                # Fallback: si tenemos texto, mandarlo como mensaje de texto
+                if texto_briefing:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=f"Informe Matutino de F.R.I.D.A.Y.\n\n{texto_briefing}\n\n(Audio no disponible)"
+                        )
+                        logger.info("[BRIEFING] Fallback texto enviado")
+                    except Exception as e2:
+                        logger.error(f"[BRIEFING] Fallback fallo: {e2}")
+                else:
+                    try:
+                        await context.bot.send_message(chat_id=user_id, text=f"Error en briefing: {str(e)[:100]}")
+                    except:
+                        pass
 
 # --- MINI SERVIDOR WEB PARA RENDER ---
 app = Flask(__name__)
