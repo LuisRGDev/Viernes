@@ -1,16 +1,22 @@
-import sqlite3
-import datetime
+import os
+import psycopg2
+from dotenv import load_dotenv
 
-DB_NAME = 'assistant.db'
+load_dotenv()
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+def get_conn():
+    """Crea y retorna una conexión a PostgreSQL en Supabase."""
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def init_db():
-    """Inicializa las tablas de la base de datos."""
-    conn = sqlite3.connect(DB_NAME)
+    """Inicializa las tablas en Supabase si no existen."""
+    conn = get_conn()
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             description TEXT NOT NULL,
             status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -18,8 +24,8 @@ def init_db():
     ''')
     c.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             message TEXT NOT NULL,
             remind_at TIMESTAMP NOT NULL,
             status TEXT DEFAULT 'pending',
@@ -28,7 +34,7 @@ def init_db():
     ''')
     c.execute('''
         CREATE TABLE IF NOT EXISTS briefing_config (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             hour INTEGER NOT NULL,
             minute INTEGER NOT NULL,
             timezone_offset INTEGER DEFAULT -6
@@ -38,62 +44,71 @@ def init_db():
     conn.close()
 
 def add_task(user_id, description):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT INTO tasks (user_id, description) VALUES (?, ?)", (user_id, description))
+    c.execute("INSERT INTO tasks (user_id, description) VALUES (%s, %s) RETURNING id", (user_id, description))
+    task_id = c.fetchone()[0]
     conn.commit()
-    task_id = c.lastrowid
     conn.close()
     return task_id
 
 def list_tasks(user_id, status='pending'):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, description FROM tasks WHERE user_id = ? AND status = ?", (user_id, status))
+    c.execute("SELECT id, description FROM tasks WHERE user_id = %s AND status = %s", (user_id, status))
     tasks = c.fetchall()
     conn.close()
     return tasks
 
 def complete_task(task_id, user_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("UPDATE tasks SET status = 'completed' WHERE id = ? AND user_id = ?", (task_id, user_id))
-    changes = conn.total_changes
+    c.execute("UPDATE tasks SET status = 'completed' WHERE id = %s AND user_id = %s", (task_id, user_id))
+    changes = c.rowcount
     conn.commit()
     conn.close()
     return changes > 0
 
 def add_reminder(user_id, message, remind_at):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT INTO reminders (user_id, message, remind_at) VALUES (?, ?, ?)", (user_id, message, remind_at))
+    c.execute(
+        "INSERT INTO reminders (user_id, message, remind_at) VALUES (%s, %s, %s) RETURNING id",
+        (user_id, message, remind_at)
+    )
+    reminder_id = c.fetchone()[0]
     conn.commit()
-    reminder_id = c.lastrowid
     conn.close()
     return reminder_id
 
 def get_pending_reminders(current_time):
-    """Obtiene los recordatorios cuya hora de alerta ya llegó o pasó."""
-    conn = sqlite3.connect(DB_NAME)
+    """Obtiene recordatorios cuya hora ya llegó o pasó."""
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, user_id, message FROM reminders WHERE status = 'pending' AND remind_at <= ?", (current_time,))
+    c.execute(
+        "SELECT id, user_id, message FROM reminders WHERE status = 'pending' AND remind_at <= %s",
+        (current_time,)
+    )
     reminders = c.fetchall()
     conn.close()
     return reminders
 
 def mark_reminder_sent(reminder_id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("UPDATE reminders SET status = 'sent' WHERE id = ?", (reminder_id,))
+    c.execute("UPDATE reminders SET status = 'sent' WHERE id = %s", (reminder_id,))
     conn.commit()
     conn.close()
 
 def set_briefing(user_id, hour, minute, timezone_offset=-6):
     """Guarda o actualiza la configuración del briefing para un usuario."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
     c.execute(
-        "INSERT OR REPLACE INTO briefing_config (user_id, hour, minute, timezone_offset) VALUES (?, ?, ?, ?)",
+        """INSERT INTO briefing_config (user_id, hour, minute, timezone_offset)
+           VALUES (%s, %s, %s, %s)
+           ON CONFLICT (user_id) DO UPDATE
+           SET hour = EXCLUDED.hour, minute = EXCLUDED.minute, timezone_offset = EXCLUDED.timezone_offset""",
         (user_id, hour, minute, timezone_offset)
     )
     conn.commit()
@@ -101,7 +116,7 @@ def set_briefing(user_id, hour, minute, timezone_offset=-6):
 
 def get_all_briefings():
     """Obtiene todos los usuarios con briefing configurado."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT user_id, hour, minute, timezone_offset FROM briefing_config")
     rows = c.fetchall()
@@ -110,11 +125,11 @@ def get_all_briefings():
 
 def delete_briefing(user_id):
     """Elimina la configuración de briefing de un usuario."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM briefing_config WHERE user_id = ?", (user_id,))
+    c.execute("DELETE FROM briefing_config WHERE user_id = %s", (user_id,))
     conn.commit()
     conn.close()
 
-# Inicializamos la base de datos al importar este módulo
+# Inicializar la base de datos al importar este módulo
 init_db()
