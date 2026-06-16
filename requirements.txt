@@ -1,7 +1,7 @@
 python-telegram-bot[job-queue]>=21.0
 google-generativeai>=0.8.3
 python-dotenv>=1.0.1
-duckduckgo-search>=5.0.0
+ddgs>=9.14.4
 edge-tts>=0.14.3
 Flask>=3.0.0
 youtube-transcript-api>=0.6.2

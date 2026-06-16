@@ -9,7 +9,7 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import contextvars
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import edge_tts
 from gtts import gTTS
 from flask import Flask
@@ -157,8 +157,14 @@ def scrape_website(url: str) -> str:
     except Exception as e:
         return f"Error leyendo la página web: {e}"
 
+def get_current_datetime() -> str:
+    """Devuelve la fecha y hora actual del sistema en formato YYYY-MM-DD HH:MM:SS. Usa esta herramienta para ubicarte temporalmente siempre que se requiera."""
+    from datetime import datetime, timezone, timedelta
+    tz = timezone(timedelta(hours=-6))
+    return f"La fecha y hora actual es: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')}"
+
 # Herramientas a proporcionar al modelo
-tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, generate_image_url, get_youtube_transcript, scrape_website]
+tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, generate_image_url, get_youtube_transcript, scrape_website, get_current_datetime]
 
 # Diccionario para guardar el contexto de los chats por ID de usuario
 chat_sessions = {}
