@@ -182,6 +182,15 @@ def get_chat_session(user_id):
         )
     return chat_sessions[user_id]
 
+def trim_chat_history(chat, max_exchanges=10):
+    """
+    Limita la memoria del bot para no gastar demasiados tokens.
+    Conserva los 2 primeros mensajes (System Prompt) y los últimos N intercambios.
+    """
+    max_msgs = max_exchanges * 2
+    if len(chat.history) > 2 + max_msgs:
+        chat.history = chat.history[:2] + chat.history[-max_msgs:]
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /start"""
     user_id = update.effective_user.id
@@ -210,6 +219,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat = get_chat_session(user_id)
         response = chat.send_message(user_text)
+        trim_chat_history(chat)
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error generando respuesta: {e}")
@@ -237,7 +247,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "data": bytes(photo_bytes)
         }
         
-        response = chat.send_message([final_prompt, image_part])
+        prompt = f"Analiza esta imagen con base en la instrucción estricta:\n{system_instruction}\n\nMensaje original del usuario: '{user_caption}'. Responde SOLAMENTE con el análisis."
+        response = chat.send_message([prompt, image_part])
+        trim_chat_history(chat)
+        
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error con imagen: {e}")
@@ -263,6 +276,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         prompt = "Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
         response = chat.send_message([prompt, audio_part])
+        trim_chat_history(chat)
         
         # Limpiar markdown y generar audio con edge-tts
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
@@ -315,6 +329,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_caption = update.message.caption or "Analiza este documento PDF y preséntame un resumen ejecutivo, por favor."
         
         response = chat.send_message([user_caption, pdf_part])
+        trim_chat_history(chat)
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error con PDF: {e}")
