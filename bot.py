@@ -268,7 +268,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             temp_path = f.name
         
         texto_limpio = clean_for_tts(response.text)
-        communicate = edge_tts.Communicate(texto_limpio, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
+        logger.info(f"[TTS VOZ] Texto a convertir ({len(texto_limpio)} chars): {texto_limpio[:100]}")
+        communicate = edge_tts.Communicate(texto_limpio, "es-MX-NuriaNeural")
         await communicate.save(temp_path)
         
         # Enviar respuesta de voz
@@ -403,7 +404,8 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                     temp_path = f.name
                 
                 texto_limpio_briefing = clean_for_tts(texto_briefing)
-                communicate = edge_tts.Communicate(texto_limpio_briefing, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
+                logger.info(f"[TTS BRIEFING] Texto a convertir ({len(texto_limpio_briefing)} chars): {texto_limpio_briefing[:100]}")
+                communicate = edge_tts.Communicate(texto_limpio_briefing, "es-MX-NuriaNeural")
                 await communicate.save(temp_path)
                 
                 # Enviar el audio del briefing
