@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import html
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -18,6 +19,24 @@ import requests
 import urllib.parse
 
 import db
+
+def clean_for_tts(text: str) -> str:
+    """Limpia el texto de formato Markdown antes de pasarlo al generador de voz."""
+    # Eliminar negritas y cursivas
+    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
+    # Eliminar encabezados
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Eliminar bullets
+    text = re.sub(r'^[-*+]\s+', '', text, flags=re.MULTILINE)
+    # Eliminar links markdown
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    # Eliminar código inline
+    text = re.sub(r'`[^`]+`', '', text)
+    # Eliminar emojis y caracteres especiales problemáticos para TTS
+    text = re.sub(r'[_~|>]', '', text)
+    # Limpiar espacios extra
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
 
 # Configurar logging
 logging.basicConfig(
@@ -244,11 +263,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = "Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
         response = chat.send_message([prompt, audio_part])
         
-        # Generar audio con edge-tts (texto plano, voz NuriaNeural estilo FRIDAY)
+        # Limpiar markdown y generar audio con edge-tts
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
             temp_path = f.name
         
-        communicate = edge_tts.Communicate(response.text, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
+        texto_limpio = clean_for_tts(response.text)
+        communicate = edge_tts.Communicate(texto_limpio, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
         await communicate.save(temp_path)
         
         # Enviar respuesta de voz
@@ -378,11 +398,12 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                 response = model.generate_content(prompt_briefing)
                 texto_briefing = response.text
                 
-                # Generar audio (texto plano, sin SSML para mayor compatibilidad)
+                # Limpiar markdown y generar audio
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
                     temp_path = f.name
                 
-                communicate = edge_tts.Communicate(texto_briefing, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
+                texto_limpio_briefing = clean_for_tts(texto_briefing)
+                communicate = edge_tts.Communicate(texto_limpio_briefing, "es-MX-NuriaNeural", rate="-8%", pitch="-5Hz")
                 await communicate.save(temp_path)
                 
                 # Enviar el audio del briefing
