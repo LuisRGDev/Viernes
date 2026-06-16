@@ -8,3 +8,4 @@ youtube-transcript-api>=0.6.2
 beautifulsoup4>=4.12.3
 requests>=2.31.0
 psycopg2-binary>=2.9.9
+gTTS>=2.5.1

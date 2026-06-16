@@ -11,6 +11,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 import contextvars
 from duckduckgo_search import DDGS
 import edge_tts
+from gtts import gTTS
 from flask import Flask
 import threading
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -269,8 +270,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         texto_limpio = clean_for_tts(response.text)
         logger.info(f"[TTS VOZ] Texto a convertir ({len(texto_limpio)} chars): {texto_limpio[:100]}")
-        communicate = edge_tts.Communicate(texto_limpio, "es-MX-NuriaNeural")
-        await communicate.save(temp_path)
+        
+        try:
+            communicate = edge_tts.Communicate(texto_limpio, "es-MX-NuriaNeural")
+            await communicate.save(temp_path)
+        except Exception as e_tts:
+            logger.warning(f"edge-tts falló: {e_tts}. Usando gTTS como respaldo...")
+            tts = gTTS(text=texto_limpio, lang='es', tld='com.mx')
+            tts.save(temp_path)
         
         # Enviar respuesta de voz
         with open(temp_path, 'rb') as audio:
@@ -413,9 +420,17 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                 texto_limpio_briefing = clean_for_tts(texto_briefing)
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
                     temp_path = f.name
-                communicate = edge_tts.Communicate(texto_limpio_briefing, "es-MX-NuriaNeural")
-                await communicate.save(temp_path)
-                logger.info("[BRIEFING] Step 4 OK: audio generado")
+                
+                try:
+                    communicate = edge_tts.Communicate(texto_limpio_briefing, "es-MX-NuriaNeural")
+                    await communicate.save(temp_path)
+                    logger.info("[BRIEFING] Step 4 OK: audio generado con edge-tts")
+                except Exception as e_tts:
+                    logger.warning(f"[BRIEFING] edge-tts falló: {e_tts}. Usando gTTS...")
+                    tts = gTTS(text=texto_limpio_briefing, lang='es', tld='com.mx')
+                    tts.save(temp_path)
+                    logger.info("[BRIEFING] Step 4 OK: audio generado con gTTS")
+
                 with open(temp_path, 'rb') as audio:
                     await context.bot.send_voice(chat_id=user_id, voice=audio, caption="Informe Matutino de F.R.I.D.A.Y.")
                 os.remove(temp_path)
