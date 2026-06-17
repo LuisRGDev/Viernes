@@ -494,10 +494,13 @@ def main():
 
     logger.info("Iniciando a F.R.I.D.A.Y. con soporte de Voz, PDF, Búsqueda Web, BD, Alarmas y Briefing Matutino...")
     
-    RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
-    if RENDER_URL:
+    # Detectar si estamos en Render (Render siempre inyecta la variable PORT)
+    port = os.environ.get("PORT")
+    
+    if port:
         # Arquitectura para Render (Webhooks)
-        port = int(os.environ.get("PORT", 10000))
+        port = int(port)
+        RENDER_URL = "https://viernes-xaus.onrender.com"
         logger.info(f"Modo Webhook activado en puerto {port}. Escuchando en: {RENDER_URL}")
         application.run_webhook(
             listen="0.0.0.0",
