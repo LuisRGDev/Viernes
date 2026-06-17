@@ -502,7 +502,7 @@ def main():
         application.run_webhook(
             listen="0.0.0.0",
             port=port,
-            url_path=f"/{TELEGRAM_TOKEN}",
+            url_path=TELEGRAM_TOKEN,
             webhook_url=f"{RENDER_URL}/{TELEGRAM_TOKEN}"
         )
     else:
