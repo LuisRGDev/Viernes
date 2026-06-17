@@ -12,8 +12,7 @@ import contextvars
 from ddgs import DDGS
 import edge_tts
 from gtts import gTTS
-from flask import Flask
-import threading
+
 from youtube_transcript_api import YouTubeTranscriptApi
 from bs4 import BeautifulSoup
 import requests
@@ -475,25 +474,8 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
 
-# --- MINI SERVIDOR WEB PARA RENDER ---
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "F.R.I.D.A.Y. está en línea y operando a capacidad óptima."
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    # Desactivar logs de Flask para no ensuciar la consola
-    import logging
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    app.run(host="0.0.0.0", port=port)
-
 def main():
     """Inicia el bot."""
-    # Iniciar servidor web en un hilo secundario para mantener a Render feliz
-    threading.Thread(target=run_web_server, daemon=True).start()
 
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -511,7 +493,22 @@ def main():
     application.job_queue.run_repeating(send_morning_briefing, interval=60, first=10)
 
     logger.info("Iniciando a F.R.I.D.A.Y. con soporte de Voz, PDF, Búsqueda Web, BD, Alarmas y Briefing Matutino...")
-    application.run_polling()
+    
+    RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
+    if RENDER_URL:
+        # Arquitectura para Render (Webhooks)
+        port = int(os.environ.get("PORT", 10000))
+        logger.info(f"Modo Webhook activado en puerto {port}. Escuchando en: {RENDER_URL}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=f"/{TELEGRAM_TOKEN}",
+            webhook_url=f"{RENDER_URL}/{TELEGRAM_TOKEN}"
+        )
+    else:
+        # Arquitectura para Local (Polling)
+        logger.info("Modo Polling activado (Local).")
+        application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
