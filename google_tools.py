@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import db
-from bot import current_user_id
 
 # Scopes (mismos que en la autenticación)
 SCOPES = [
@@ -23,6 +22,7 @@ def read_gmail(max_results: int = 5) -> str:
     """Lee los correos más recientes en la bandeja de entrada (Inbox).
     Usa esta herramienta cuando el usuario pregunte por sus correos o si le ha llegado algo nuevo.
     """
+    from bot import current_user_id
     user_id = current_user_id.get()
     creds = get_google_credentials(user_id)
     if not creds:
@@ -59,6 +59,7 @@ def draft_email(to: str, subject: str, body: str) -> str:
     """
     import base64
     from email.message import EmailMessage
+    from bot import current_user_id
 
     user_id = current_user_id.get()
     creds = get_google_credentials(user_id)
@@ -85,6 +86,7 @@ def list_events(days: int = 1) -> str:
     """Obtiene los próximos eventos y reuniones de Google Calendar.
     Usa esta herramienta cuando el usuario pregunte por su agenda, reuniones o eventos programados.
     """
+    from bot import current_user_id
     user_id = current_user_id.get()
     creds = get_google_credentials(user_id)
     if not creds:
@@ -124,6 +126,7 @@ def create_event(summary: str, start_datetime_iso: str, end_datetime_iso: str, d
     Usa esta herramienta cuando el usuario pida agendar algo, programar una reunión o agregar un evento a su calendario.
     Asegúrate de deducir el año, mes y día actuales correctamente usando la herramienta get_current_datetime si el usuario dice 'mañana' o 'el viernes'.
     """
+    from bot import current_user_id
     user_id = current_user_id.get()
     creds = get_google_credentials(user_id)
     if not creds:
