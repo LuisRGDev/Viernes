@@ -33,6 +33,9 @@ def init_db():
         )
     ''')
     c.execute('''
+        ALTER TABLE reminders ADD COLUMN IF NOT EXISTS recurrence_minutes INTEGER DEFAULT 0;
+    ''')
+    c.execute('''
         CREATE TABLE IF NOT EXISTS briefing_config (
             user_id BIGINT PRIMARY KEY,
             hour INTEGER NOT NULL,
@@ -69,12 +72,12 @@ def complete_task(task_id, user_id):
     conn.close()
     return changes > 0
 
-def add_reminder(user_id, message, remind_at):
+def add_reminder(user_id, message, remind_at, recurrence_minutes=0):
     conn = get_conn()
     c = conn.cursor()
     c.execute(
-        "INSERT INTO reminders (user_id, message, remind_at) VALUES (%s, %s, %s) RETURNING id",
-        (user_id, message, remind_at)
+        "INSERT INTO reminders (user_id, message, remind_at, recurrence_minutes) VALUES (%s, %s, %s, %s) RETURNING id",
+        (user_id, message, remind_at, recurrence_minutes)
     )
     reminder_id = c.fetchone()[0]
     conn.commit()
@@ -86,7 +89,7 @@ def get_pending_reminders(current_time):
     conn = get_conn()
     c = conn.cursor()
     c.execute(
-        "SELECT id, user_id, message FROM reminders WHERE status = 'pending' AND remind_at <= %s",
+        "SELECT id, user_id, message, recurrence_minutes FROM reminders WHERE status = 'pending' AND remind_at <= %s",
         (current_time,)
     )
     reminders = c.fetchall()
@@ -97,6 +100,13 @@ def mark_reminder_sent(reminder_id):
     conn = get_conn()
     c = conn.cursor()
     c.execute("UPDATE reminders SET status = 'sent' WHERE id = %s", (reminder_id,))
+    conn.commit()
+    conn.close()
+
+def update_reminder_next_run(reminder_id, next_remind_at):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE reminders SET remind_at = %s WHERE id = %s", (next_remind_at, reminder_id))
     conn.commit()
     conn.close()
 

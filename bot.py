@@ -84,17 +84,22 @@ def mark_task_done(task_id: int) -> str:
         return f"Tarea {task_id} purgada de la base de datos."
     return f"Error: No encuentro la tarea {task_id} en los registros."
 
-def schedule_reminder(message: str, delay_minutes: float) -> str:
+def schedule_reminder(message: str, delay_minutes: float, recurrence_minutes: float = 0) -> str:
     """Programa un recordatorio o alarma que sonará en el futuro.
     
     Args:
         message: El texto del recordatorio que le llegará al usuario.
         delay_minutes: En cuántos minutos a partir de ahora se enviará la alarma.
+        recurrence_minutes: Opcional. En cuántos minutos se repetirá periódicamente después de la primera vez. Usa 1440 para diario, 10080 para semanal (7 días), etc. Usa 0 si no se repite.
     """
     user_id = current_user_id.get()
     remind_at = datetime.now() + timedelta(minutes=delay_minutes)
-    db.add_reminder(user_id, message, remind_at.strftime('%Y-%m-%d %H:%M:%S'))
-    return f"Alarma configurada: '{message}'. Le notificaré en {delay_minutes} minutos (a las {remind_at.strftime('%H:%M')}), Jefe."
+    db.add_reminder(user_id, message, remind_at.strftime('%Y-%m-%d %H:%M:%S'), int(recurrence_minutes))
+    
+    if recurrence_minutes > 0:
+        return f"Alarma recurrente configurada: '{message}'. Notificaré en {delay_minutes} minutos (a las {remind_at.strftime('%H:%M')}), y luego cada {recurrence_minutes} minutos, Jefe."
+    else:
+        return f"Alarma configurada: '{message}'. Le notificaré en {delay_minutes} minutos (a las {remind_at.strftime('%H:%M')}), Jefe."
 
 def search_web(query: str) -> str:
     """Busca en internet en tiempo real para obtener información actualizada. Úsalo SIEMPRE que te pregunten sobre noticias recientes, precios actuales de monedas, clima actual, fechas de eventos futuros o cualquier información que pueda cambiar con el tiempo. NUNCA inventes información reciente."""
@@ -171,7 +176,7 @@ chat_sessions = {}
 def get_chat_session(user_id):
     """Obtiene o crea una sesión de chat para un usuario con personalidad de F.R.I.D.A.Y."""
     if user_id not in chat_sessions:
-        model = genai.GenerativeModel('gemini-2.0-flash', tools=tools)
+        model = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
         chat_sessions[user_id] = model.start_chat(
             enable_automatic_function_calling=True,
             history=[
@@ -342,14 +347,19 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_reminders_job(context: ContextTypes.DEFAULT_TYPE):
     """Trabajo en segundo plano que revisa alarmas cada 10 segundos."""
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    reminders = db.get_pending_reminders(now)
+    now = datetime.now()
+    reminders = db.get_pending_reminders(now.strftime('%Y-%m-%d %H:%M:%S'))
     
     for r in reminders:
-        r_id, user_id, message = r[0], r[1], r[2]
+        r_id, user_id, message, recurrence_minutes = r[0], r[1], r[2], r[3]
         try:
             await context.bot.send_message(chat_id=user_id, text=f"⏰ **¡RECORDATORIO!**\n\n{message}", parse_mode='Markdown')
-            db.mark_reminder_sent(r_id)
+            
+            if recurrence_minutes and recurrence_minutes > 0:
+                next_time = now + timedelta(minutes=recurrence_minutes)
+                db.update_reminder_next_run(r_id, next_time.strftime('%Y-%m-%d %H:%M:%S'))
+            else:
+                db.mark_reminder_sent(r_id)
         except Exception as e:
             logger.error(f"Error enviando recordatorio a {user_id}: {e}")
 
@@ -430,7 +440,7 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                     f"Resume en 3 frases cortas las noticias: {noticias[:1500]}. "
                     f"Menciona las tareas del dia: {lista_tareas}. Maximo 120 palabras."
                 )
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 response = await model.generate_content_async(prompt_briefing)
                 texto_briefing = response.text
                 logger.info(f"[BRIEFING] Step 3 OK: {len(texto_briefing)} chars")
