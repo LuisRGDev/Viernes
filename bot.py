@@ -231,7 +231,7 @@ def get_chat_session(user_id):
             
         bound_tools = [make_bound(t) for t in tools]
         
-        model = genai.GenerativeModel('gemini-2.0-flash', tools=bound_tools)
+        model = genai.GenerativeModel('gemini-2.5-flash', tools=bound_tools)
         chat_sessions[user_id] = model.start_chat(
             enable_automatic_function_calling=True,
             history=[
