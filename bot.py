@@ -220,13 +220,16 @@ chat_sessions = {}
 def get_chat_session(user_id):
     """Obtiene o crea una sesión de chat para un usuario con personalidad de F.R.I.D.A.Y."""
     if user_id not in chat_sessions:
-        import functools
+        import inspect
         
         def make_bound(func):
-            @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 current_user_id.set(user_id)
                 return func(*args, **kwargs)
+            wrapper.__name__ = func.__name__
+            wrapper.__doc__ = func.__doc__
+            wrapper.__annotations__ = getattr(func, '__annotations__', {})
+            wrapper.__signature__ = inspect.signature(func)
             return wrapper
             
         bound_tools = [make_bound(t) for t in tools]
