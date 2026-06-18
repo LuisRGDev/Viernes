@@ -171,7 +171,7 @@ chat_sessions = {}
 def get_chat_session(user_id):
     """Obtiene o crea una sesión de chat para un usuario con personalidad de F.R.I.D.A.Y."""
     if user_id not in chat_sessions:
-        model = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
+        model = genai.GenerativeModel('gemini-2.0-flash', tools=tools)
         chat_sessions[user_id] = model.start_chat(
             enable_automatic_function_calling=True,
             history=[
@@ -430,7 +430,7 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                     f"Resume en 3 frases cortas las noticias: {noticias[:1500]}. "
                     f"Menciona las tareas del dia: {lista_tareas}. Maximo 120 palabras."
                 )
-                model = genai.GenerativeModel('gemini-2.5-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash')
                 response = await model.generate_content_async(prompt_briefing)
                 texto_briefing = response.text
                 logger.info(f"[BRIEFING] Step 3 OK: {len(texto_briefing)} chars")
