@@ -43,6 +43,12 @@ def init_db():
             timezone_offset INTEGER DEFAULT -6
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS google_tokens (
+            user_id BIGINT PRIMARY KEY,
+            token_json TEXT NOT NULL
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -140,6 +146,31 @@ def delete_briefing(user_id):
     c.execute("DELETE FROM briefing_config WHERE user_id = %s", (user_id,))
     conn.commit()
     conn.close()
+
+def save_google_token(user_id, token_json):
+    """Guarda o actualiza el token de Google para un usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO google_tokens (user_id, token_json)
+           VALUES (%s, %s)
+           ON CONFLICT (user_id) DO UPDATE
+           SET token_json = EXCLUDED.token_json""",
+        (user_id, token_json)
+    )
+    conn.commit()
+    conn.close()
+
+def get_google_token(user_id):
+    """Obtiene el token de Google guardado de un usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT token_json FROM google_tokens WHERE user_id = %s", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return None
 
 # Inicializar la base de datos al importar este módulo
 init_db()

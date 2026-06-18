@@ -205,9 +205,14 @@ def get_weather(location: str) -> str:
     except Exception as e:
         logger.error(f"Error obteniendo clima: {e}")
         return f"No pude obtener el clima para '{location}'. Error: {e}"
+from google_tools import read_gmail, draft_email, list_events, create_event
 
 # Herramientas a proporcionar al modelo
-tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, generate_image_url, get_youtube_transcript, scrape_website, get_current_datetime, get_weather]
+tools = [
+    add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, 
+    generate_image_url, get_youtube_transcript, scrape_website, get_current_datetime,
+    read_gmail, draft_email, list_events, create_event
+]
 
 # Diccionario para guardar el contexto de los chats por ID de usuario
 chat_sessions = {}

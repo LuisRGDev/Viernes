@@ -10,3 +10,7 @@ beautifulsoup4>=4.12.3
 requests>=2.31.0
 psycopg2-binary>=2.9.9
 gTTS>=2.5.1
+
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
