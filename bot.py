@@ -171,7 +171,7 @@ chat_sessions = {}
 def get_chat_session(user_id):
     """Obtiene o crea una sesión de chat para un usuario con personalidad de F.R.I.D.A.Y."""
     if user_id not in chat_sessions:
-        model = genai.GenerativeModel('gemini-flash-latest', tools=tools)
+        model = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
         chat_sessions[user_id] = model.start_chat(
             enable_automatic_function_calling=True,
             history=[
@@ -223,7 +223,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat = get_chat_session(user_id)
-        response = chat.send_message(user_text)
+        response = await chat.send_message_async(user_text)
         trim_chat_history(chat)
         await update.message.reply_text(response.text)
     except Exception as e:
@@ -253,7 +253,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         prompt = f"Analiza esta imagen con base en la instrucción estricta:\n{system_instruction}\n\nMensaje original del usuario: '{user_caption}'. Responde SOLAMENTE con el análisis."
-        response = chat.send_message([prompt, image_part])
+        response = await chat.send_message_async([prompt, image_part])
         trim_chat_history(chat)
         
         await update.message.reply_text(response.text)
@@ -280,7 +280,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         prompt = "Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
-        response = chat.send_message([prompt, audio_part])
+        response = await chat.send_message_async([prompt, audio_part])
         trim_chat_history(chat)
         
         # Limpiar markdown y generar audio con edge-tts
@@ -333,7 +333,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user_caption = update.message.caption or "Analiza este documento PDF y preséntame un resumen ejecutivo, por favor."
         
-        response = chat.send_message([user_caption, pdf_part])
+        response = await chat.send_message_async([user_caption, pdf_part])
         trim_chat_history(chat)
         await update.message.reply_text(response.text)
     except Exception as e:
@@ -430,8 +430,8 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                     f"Resume en 3 frases cortas las noticias: {noticias[:1500]}. "
                     f"Menciona las tareas del dia: {lista_tareas}. Maximo 120 palabras."
                 )
-                model = genai.GenerativeModel('gemini-flash-latest')
-                response = model.generate_content(prompt_briefing)
+                model = genai.GenerativeModel('gemini-2.5-flash')
+                response = await model.generate_content_async(prompt_briefing)
                 texto_briefing = response.text
                 logger.info(f"[BRIEFING] Step 3 OK: {len(texto_briefing)} chars")
 
