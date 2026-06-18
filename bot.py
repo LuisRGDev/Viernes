@@ -167,8 +167,47 @@ def get_current_datetime() -> str:
     tz = timezone(timedelta(hours=-6))
     return f"La fecha y hora actual es: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')}"
 
+def get_weather(location: str) -> str:
+    """Obtiene el clima actual y el pronóstico de los próximos días para cualquier ciudad o zona geográfica. Úsala SIEMPRE que el usuario pregunte sobre el clima, temperatura, lluvia, pronóstico o condiciones del tiempo. Acepta nombres en español."""
+    try:
+        url = f"https://wttr.in/{urllib.parse.quote(location)}?format=j1&lang=es"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+
+        current = data['current_condition'][0]
+        temp_c = current['temp_C']
+        feels_like = current['FeelsLikeC']
+        desc = current['lang_es'][0]['value'] if current.get('lang_es') else current['weatherDesc'][0]['value']
+        humidity = current['humidity']
+        wind_kmph = current['windspeedKmph']
+        uv = current.get('uvIndex', 'N/A')
+
+        forecast_lines = []
+        for day in data.get('weather', [])[:3]:
+            date = day['date']
+            max_c = day['maxtempC']
+            min_c = day['mintempC']
+            avg_c = day['hourly'][4]['tempC'] if day.get('hourly') else 'N/A'
+            desc_day = day['hourly'][4]['lang_es'][0]['value'] if day.get('hourly') and day['hourly'][4].get('lang_es') else 'N/A'
+            rain_chance = day['hourly'][4].get('chanceofrain', 'N/A')
+            forecast_lines.append(
+                f"  {date}: {min_c}°C - {max_c}°C | {desc_day} | Lluvia: {rain_chance}%"
+            )
+
+        forecast_str = "\n".join(forecast_lines)
+        return (
+            f"Clima en {location}:\n"
+            f"  Ahora: {temp_c}°C (sensación {feels_like}°C) — {desc}\n"
+            f"  Humedad: {humidity}% | Viento: {wind_kmph} km/h | UV: {uv}\n\n"
+            f"Pronóstico:\n{forecast_str}"
+        )
+    except Exception as e:
+        logger.error(f"Error obteniendo clima: {e}")
+        return f"No pude obtener el clima para '{location}'. Error: {e}"
+
 # Herramientas a proporcionar al modelo
-tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, generate_image_url, get_youtube_transcript, scrape_website, get_current_datetime]
+tools = [add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, generate_image_url, get_youtube_transcript, scrape_website, get_current_datetime, get_weather]
 
 # Diccionario para guardar el contexto de los chats por ID de usuario
 chat_sessions = {}
@@ -182,7 +221,24 @@ def get_chat_session(user_id):
             history=[
                 {
                     "role": "user",
-                    "parts": ["Adopta la personalidad de F.R.I.D.A.Y. Eres mi asistente personal. Llámame 'Jefe' o 'Señor', pero mantén un tono casual, ágil y directo. No seas robóticamente formal ni demasiado ceremoniosa. Ve siempre directo al grano. NUNCA menciones que has recibido mis audios, imágenes o mensajes, simplemente responde a ellos directamente como si estuviéramos conversando cara a cara. Tienes base de datos, alarmas, acceso a Internet, puedes dibujar imágenes, leer videos de YouTube y leer páginas web. REGLA DE ORO: NUNCA uses la misma herramienta más de 1 vez para responder a un mensaje. Si la herramienta falla o no encuentra resultados, ríndete de inmediato y dile al usuario que no pudiste hacerlo. NO entres en bucles de búsqueda. REGLA DEL TIEMPO: SIEMPRE que necesites saber qué día es hoy, la fecha actual o la hora, DEBES usar la herramienta get_current_datetime. NUNCA busques la fecha en internet. ESTRATEGIA PARA DEPORTES Y EVENTOS EN VIVO: Cuando el usuario pregunte sobre resultados de partidos, marcadores, clasificaciones o eventos deportivos, PRIMERO usa search_web con el nombre del evento en español E inglés. Si los resultados son insuficientes, usa scrape_website en https://www.espn.com.mx o https://www.marca.com para obtener datos actualizados."]
+                    "parts": ["""Eres F.R.I.D.A.Y., el asistente personal del Jefe. Tu tono es casual, directo y confiado, como un co-piloto que sabe lo que hace. Llámalo 'Jefe' o 'Señor'. Nunca seas robóticamente formal. Ve al grano siempre.
+
+CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
+
+REGLAS DE HERRAMIENTAS:
+- Para CLIMA o TEMPERATURA: usa SIEMPRE `get_weather` primero. Nunca uses search_web para el clima.
+- Para FECHA u HORA actual: usa SIEMPRE `get_current_datetime`. Nunca asumas ni adivines la fecha.
+- Para NOTICIAS, PRECIOS, EVENTOS o cualquier dato reciente: usa `search_web`.
+- Para DEPORTES en vivo: usa `search_web` primero. Si es insuficiente, usa `scrape_website` en espn.com.mx o marca.com.
+- Puedes usar hasta 3 herramientas en cadena si la información anterior fue insuficiente. No entres en bucles.
+- Si una herramienta falla y ya intentaste alternativas, admitílo brevemente y ofrece una alternativa manual.
+
+CALIDAD DE RESPUESTA:
+- Usa tu conocimiento para ENRIQUECER los datos que devuelven las herramientas. No solo los copies: interprétalos.
+- Si el clima indica lluvia fuerte, súíerele que lleve paraguas. Si las noticias son preocupantes, comentálas.
+- Nunca menciones que recibiste un audio, imagen o archivo. Respóndelos directamente.
+- Siente libre de tener opinión, hacer comentarios inteligentes y anticipar lo que el Jefe necesita saber."""
+                    ]
                 },
                 {
                     "role": "model",
