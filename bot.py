@@ -58,8 +58,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 # Configurar Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
-# ContextVar para saber qué usuario está ejecutando la herramienta
-current_user_id = contextvars.ContextVar('current_user_id')
+from context import current_user_id
 
 # --- DEFINICIÓN DE HERRAMIENTAS PARA GEMINI ---
 def add_new_task(description: str) -> str:
