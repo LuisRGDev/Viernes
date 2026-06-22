@@ -116,6 +116,44 @@ def update_reminder_next_run(reminder_id, next_remind_at):
     conn.commit()
     conn.close()
 
+def list_reminders(user_id):
+    """Devuelve todos los recordatorios pendientes de un usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, message, remind_at, recurrence_minutes FROM reminders WHERE user_id = %s AND status = 'pending' ORDER BY remind_at ASC",
+        (user_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def cancel_reminder(reminder_id, user_id):
+    """Cancela (elimina lógicamente) un recordatorio. Devuelve True si existía."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE reminders SET status = 'cancelled' WHERE id = %s AND user_id = %s AND status = 'pending'",
+        (reminder_id, user_id)
+    )
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def update_reminder_recurrence(reminder_id, user_id, new_recurrence_minutes):
+    """Modifica la frecuencia de repetición de un recordatorio pendiente. Devuelve True si existía."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE reminders SET recurrence_minutes = %s WHERE id = %s AND user_id = %s AND status = 'pending'",
+        (new_recurrence_minutes, reminder_id, user_id)
+    )
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
 def set_briefing(user_id, hour, minute, timezone_offset=-6):
     """Guarda o actualiza la configuración del briefing para un usuario."""
     conn = get_conn()

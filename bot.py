@@ -100,6 +100,38 @@ def schedule_reminder(message: str, delay_minutes: float, recurrence_minutes: fl
     else:
         return f"Alarma configurada: '{message}'. Le notificaré en {delay_minutes} minutos (a las {remind_at.strftime('%H:%M')}), Jefe."
 
+def list_reminders() -> str:
+    """Lista todos los recordatorios activos (pendientes) del usuario con su ID, mensaje, próxima ejecución y frecuencia. Úsala cuando el usuario pregunte qué recordatorios tiene, quiera ver sus alarmas o necesite el ID para cancelar o modificar uno."""
+    user_id = current_user_id.get()
+    reminders = db.list_reminders(user_id)
+    if not reminders:
+        return "No hay recordatorios activos en el sistema, Jefe."
+    lines = []
+    for r in reminders:
+        r_id, message, remind_at, recurrence = r
+        recurrence_str = f", se repite cada {recurrence} min" if recurrence and recurrence > 0 else ", una sola vez"
+        lines.append(f"ID {r_id}: '{message}' — próxima vez a las {remind_at}{recurrence_str}")
+    return "Recordatorios activos:\n" + "\n".join(lines)
+
+def cancel_reminder(reminder_id: int) -> str:
+    """Cancela y elimina un recordatorio activo usando su ID numérico. Úsala cuando el usuario pida cancelar, borrar o detener un recordatorio específico. Primero lista los recordatorios si el usuario no sabe el ID."""
+    user_id = current_user_id.get()
+    success = db.cancel_reminder(reminder_id, user_id)
+    if success:
+        return f"Recordatorio ID {reminder_id} cancelado y removido del sistema."
+    return f"No encontré un recordatorio activo con ID {reminder_id} en los registros."
+
+def modify_reminder_recurrence(reminder_id: int, new_recurrence_minutes: float) -> str:
+    """Cambia la frecuencia de repetición de un recordatorio ya programado. Úsala cuando el usuario pida cambiar cada cuánto se repite una alarma. Usa 0 para convertirlo en un recordatorio de una sola vez. Primero lista los recordatorios si el usuario no sabe el ID."""
+    user_id = current_user_id.get()
+    success = db.update_reminder_recurrence(reminder_id, user_id, int(new_recurrence_minutes))
+    if success:
+        if new_recurrence_minutes > 0:
+            return f"Listo, Jefe. El recordatorio ID {reminder_id} ahora se repite cada {new_recurrence_minutes} minutos."
+        else:
+            return f"Listo. El recordatorio ID {reminder_id} ahora solo se ejecutará una vez más y no se repetirá."
+    return f"No encontré un recordatorio activo con ID {reminder_id} en los registros."
+
 def search_web(query: str) -> str:
     """Busca en internet en tiempo real para obtener información actualizada. Úsalo SIEMPRE que te pregunten sobre noticias recientes, precios actuales de monedas, clima actual, fechas de eventos futuros o cualquier información que pueda cambiar con el tiempo. NUNCA inventes información reciente."""
     try:
@@ -208,8 +240,10 @@ from google_tools import read_gmail, draft_email, list_events, create_event
 
 # Herramientas a proporcionar al modelo
 tools = [
-    add_new_task, get_tasks, mark_task_done, schedule_reminder, search_web, 
-    generate_image_url, get_youtube_transcript, scrape_website, get_current_datetime,
+    add_new_task, get_tasks, mark_task_done,
+    schedule_reminder, list_reminders, cancel_reminder, modify_reminder_recurrence,
+    search_web, generate_image_url, get_youtube_transcript, scrape_website,
+    get_current_datetime, get_weather,
     read_gmail, draft_email, list_events, create_event
 ]
 
