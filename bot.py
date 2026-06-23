@@ -6,8 +6,8 @@ import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import google.generativeai as genai
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import contextvars
 from ddgs import DDGS
 import edge_tts
@@ -207,6 +207,59 @@ def delete_habit(habit_id: int) -> str:
         return f"Hábito ID {habit_id} y su historial eliminados del sistema."
     return f"No encontré un hábito con ID {habit_id} en los registros."
 
+# ─── HERRAMIENTAS DE WATCHLIST ────────────────────────────────────────────────────
+
+TYPE_LABELS = {'book': '📚 Libro', 'movie': '🎬 Película', 'series': '📺 Serie'}
+STATUS_LABELS = {'pending': '⏳ Pendiente', 'in_progress': '▶️ En progreso', 'done': '✅ Terminado'}
+
+def add_to_watchlist(title: str, media_type: str) -> str:
+    """Agrega un libro, película o serie a la lista de pendientes del usuario.
+    media_type debe ser exactamente 'book', 'movie' o 'series'.
+    Úsala cuando el usuario diga 'agrega X a mi lista', 'quiero ver X', 'anota que quiero leer X'."""
+    user_id = current_user_id.get()
+    if media_type not in ('book', 'movie', 'series'):
+        return "Tipo inválido. Usa 'book', 'movie' o 'series'."
+    item_id = db.add_to_watchlist(user_id, title.strip(), media_type)
+    label = TYPE_LABELS.get(media_type, media_type)
+    return f"{label} '{title}' agregado a tu watchlist con ID {item_id}."
+
+def list_watchlist(media_type: str = '', status: str = '') -> str:
+    """Muestra la watchlist del usuario. Filtra por tipo ('book','movie','series') y/o estado ('pending','in_progress','done').
+    Deja vacío para ver todo. Úsala cuando el usuario pregunte qué tiene en su lista, qué quiere ver, o qué quiere leer."""
+    user_id = current_user_id.get()
+    items = db.list_watchlist(user_id, media_type or None, status or None)
+    if not items:
+        return "Tu watchlist está vacía, Jefe. Agrega libros, películas o series."
+    lines = []
+    for i_id, title, mtype, mstatus, notes in items:
+        label = TYPE_LABELS.get(mtype, mtype)
+        slabel = STATUS_LABELS.get(mstatus, mstatus)
+        note_str = f" — {notes}" if notes else ""
+        lines.append(f"ID {i_id}: {label} '{title}' | {slabel}{note_str}")
+    return "Tu watchlist:\n" + "\n".join(lines)
+
+def update_watchlist_item(item_id: int, status: str, notes: str = '') -> str:
+    """Actualiza el estado de un ítem de la watchlist. status: 'pending', 'in_progress' o 'done'.
+    Úsala cuando el usuario diga que ya vio/leyó algo, que está en progreso, o quiera agregar una nota.
+    Si no sabe el ID, usa list_watchlist primero."""
+    user_id = current_user_id.get()
+    if status not in ('pending', 'in_progress', 'done'):
+        return "Estado inválido. Usa 'pending', 'in_progress' o 'done'."
+    success = db.update_watchlist_item(item_id, user_id, status, notes)
+    if success:
+        slabel = STATUS_LABELS.get(status, status)
+        note_str = f" Nota guardada: '{notes}'." if notes else ""
+        return f"Ítem ID {item_id} actualizado a {slabel}.{note_str}"
+    return f"No encontré el ítem ID {item_id} en tu watchlist."
+
+def remove_from_watchlist(item_id: int) -> str:
+    """Elimina un ítem de la watchlist usando su ID. Úsala cuando el usuario ya no quiera rastrear algo."""
+    user_id = current_user_id.get()
+    success = db.delete_from_watchlist(item_id, user_id)
+    if success:
+        return f"Ítem ID {item_id} eliminado de la watchlist."
+    return f"No encontré el ítem ID {item_id} en tu watchlist."
+
 def search_web(query: str) -> str:
     """Busca en internet en tiempo real para obtener información actualizada. Úsalo SIEMPRE que te pregunten sobre noticias recientes, precios actuales de monedas, clima actual, fechas de eventos futuros o cualquier información que pueda cambiar con el tiempo. NUNCA inventes información reciente."""
     try:
@@ -319,6 +372,7 @@ tools = [
     schedule_reminder, list_reminders, cancel_reminder, modify_reminder_recurrence,
     remember_fact, recall_facts, forget_fact,
     add_habit, list_habits, complete_habit, delete_habit,
+    add_to_watchlist, list_watchlist, update_watchlist_item, remove_from_watchlist,
     search_web, generate_image_url, get_youtube_transcript, scrape_website,
     get_current_datetime, get_weather,
     read_gmail, draft_email, send_email, list_events, create_event
@@ -359,7 +413,7 @@ def get_chat_session(user_id):
                     "role": "user",
                     "parts": [f"""Eres F.R.I.D.A.Y., el asistente personal del Jefe. Tu tono es casual, directo y confiado, como un co-piloto que sabe lo que hace. Llámalo 'Jefe' o 'Señor'. Nunca seas robóticamente formal. Ve al grano siempre.
 
-CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, memoria persistente de datos del usuario, rastreo de hábitos con racha, acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
+CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, memoria persistente, rastreo de hábitos, watchlist de libros/películas/series, acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
 
 REGLAS DE HERRAMIENTAS:
 - Para CLIMA o TEMPERATURA: usa SIEMPRE `get_weather` primero. Nunca uses search_web para el clima.
@@ -371,6 +425,7 @@ REGLAS DE HERRAMIENTAS:
 - Para CORREOS: usa `draft_email` si el usuario dice 'redacta', 'escribe' o 'borra'. Usa `send_email` SOLO si el usuario dice explícitamente 'envía' o confirma enviar.
 - Para DATOS PERSONALES del usuario: usa `remember_fact` para guardar lo que te cuente. Usa `recall_facts` si necesitas recordar algo de él.
 - Para HÁBITOS: usa `list_habits` para mostrar el progreso, `complete_habit` cuando diga que lo hizo, `add_habit` para nuevos y `delete_habit` para eliminar.
+- Para WATCHLIST: usa `add_to_watchlist` para agregar contenido, `list_watchlist` para ver la lista, `update_watchlist_item` para marcar como visto/leído, `remove_from_watchlist` para eliminar. Cuando el usuario pida recomendaciones basadas en su historial, combina `list_watchlist` con `search_web`.
 
 CALIDAD DE RESPUESTA:
 - Usa tu conocimiento para ENRIQUECER los datos que devuelven las herramientas. No solo los copies: interprétalos.
@@ -548,7 +603,19 @@ async def check_reminders_job(context: ContextTypes.DEFAULT_TYPE):
     for r in reminders:
         r_id, user_id, message, recurrence_minutes = r[0], r[1], r[2], r[3]
         try:
-            await context.bot.send_message(chat_id=user_id, text=f"⏰ **¡RECORDATORIO!**\n\n{message}", parse_mode='Markdown')
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⏸ +5 min", callback_data=f"snooze_5_{r_id}"),
+                    InlineKeyboardButton("⏸ +30 min", callback_data=f"snooze_30_{r_id}"),
+                    InlineKeyboardButton("✅ Listo", callback_data=f"done_{r_id}"),
+                ]
+            ])
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"⏰ **¡RECORDATORIO!**\n\n{message}",
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
             
             if recurrence_minutes and recurrence_minutes > 0:
                 next_time = now + timedelta(minutes=recurrence_minutes)
@@ -557,6 +624,164 @@ async def check_reminders_job(context: ContextTypes.DEFAULT_TYPE):
                 db.mark_reminder_sent(r_id)
         except Exception as e:
             logger.error(f"Error enviando recordatorio a {user_id}: {e}")
+
+async def handle_reminder_callback(update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja los botones inline de Snooze y Listo en los recordatorios."""
+    query = update.callback_query
+    await query.answer()  # Quita el "loading" del botón
+    data = query.data
+
+    try:
+        if data.startswith("snooze_5_"):
+            r_id = int(data.split("_")[2])
+            new_time = datetime.now() + timedelta(minutes=5)
+            db.update_reminder_next_run(r_id, new_time.strftime('%Y-%m-%d %H:%M:%S'))
+            db.update_reminders_status_pending(r_id)  # Re-activar si fue marcado
+            await query.edit_message_text(
+                text=f"⏸ *Snoozeado 5 minutos.* Te aviso a las {new_time.strftime('%H:%M')}, Jefe.",
+                parse_mode='Markdown'
+            )
+        elif data.startswith("snooze_30_"):
+            r_id = int(data.split("_")[2])
+            new_time = datetime.now() + timedelta(minutes=30)
+            db.update_reminder_next_run(r_id, new_time.strftime('%Y-%m-%d %H:%M:%S'))
+            db.update_reminders_status_pending(r_id)
+            await query.edit_message_text(
+                text=f"⏸ *Snoozeado 30 minutos.* Te aviso a las {new_time.strftime('%H:%M')}, Jefe.",
+                parse_mode='Markdown'
+            )
+        elif data.startswith("done_"):
+            r_id = int(data.split("_")[1])
+            db.mark_reminder_sent(r_id)
+            await query.edit_message_text(
+                text="✅ *¡Listo, Jefe!* Recordatorio archivado.",
+                parse_mode='Markdown'
+            )
+    except Exception as e:
+        logger.error(f"Error en callback de recordatorio: {e}")
+        await query.edit_message_text(text="⚠️ Error al procesar la acción.")
+
+async def foco_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inicia un timer Pomodoro. Uso: /foco [minutos] (default: 25)"""
+    user_id = update.effective_user.id
+    args = context.args
+    
+    try:
+        minutes = int(args[0]) if args else 25
+        if not (1 <= minutes <= 90):
+            raise ValueError
+    except (ValueError, IndexError):
+        await update.message.reply_text(
+            "🍅 *Modo Foco*\n\nUso: `/foco [minutos]`\nEjemplos: `/foco` (25 min) | `/foco 45` | `/foco 50`\nMáximo 90 minutos por sesión.",
+            parse_mode='Markdown'
+        )
+        return
+
+    end_time = datetime.now() + timedelta(minutes=minutes)
+    await update.message.reply_text(
+        f"🍅 *Sesión de foco iniciada: {minutes} min.*\n"
+        f"A las {end_time.strftime('%H:%M')} te aviso, Jefe. A trabajar.",
+        parse_mode='Markdown'
+    )
+    
+    # Programar el job de una sola vez
+    context.job_queue.run_once(
+        pomodoro_done_job,
+        when=timedelta(minutes=minutes),
+        data={'user_id': user_id, 'duration': minutes},
+        name=f"pomodoro_{user_id}"
+    )
+
+async def pomodoro_done_job(context: ContextTypes.DEFAULT_TYPE):
+    """Se dispara cuando termina la sesión Pomodoro."""
+    user_id = context.job.data['user_id']
+    duration = context.job.data['duration']
+    
+    # Registrar la sesión en la DB
+    db.add_pomodoro_session(user_id, duration)
+    
+    # Obtener total de sesiones del día
+    from datetime import date
+    count_today, mins_today = db.get_pomodoro_count_since(user_id, date.today().isoformat())
+    
+    # Mensaje motivacional según el número de sesiones
+    if count_today >= 4:
+        motivacion = f"🔥 {count_today} sesiones hoy. Eso es rendimiento de élite, Jefe."
+    elif count_today >= 2:
+        motivacion = f"⚡ {count_today} sesiones completadas hoy. Buen ritmo."
+    else:
+        motivacion = "Primera sesión completada. Buen comienzo."
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔁 Otro Pomodoro", callback_data=f"pomo_repeat_{duration}_{user_id}"),
+            InlineKeyboardButton("☕ Descanso 5 min", callback_data=f"pomo_break_{user_id}"),
+            InlineKeyboardButton("🛑 Terminar", callback_data=f"pomo_stop_{user_id}"),
+        ]
+    ])
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=f"✅ *¡Sesión de {duration} min completada!*\n{motivacion}",
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+
+async def handle_pomodoro_callback(update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja los botones al terminar un Pomodoro."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    try:
+        if data.startswith("pomo_repeat_"):
+            parts = data.split("_")
+            duration = int(parts[2])
+            user_id = int(parts[3])
+            end_time = datetime.now() + timedelta(minutes=duration)
+            context.job_queue.run_once(
+                pomodoro_done_job,
+                when=timedelta(minutes=duration),
+                data={'user_id': user_id, 'duration': duration},
+                name=f"pomodoro_{user_id}"
+            )
+            await query.edit_message_text(
+                text=f"🍅 *Otro pomodoro de {duration} min iniciado.*\nA las {end_time.strftime('%H:%M')} vuelvo, Jefe.",
+                parse_mode='Markdown'
+            )
+        elif data.startswith("pomo_break_"):
+            user_id = int(data.split("_")[2])
+            end_time = datetime.now() + timedelta(minutes=5)
+            context.job_queue.run_once(
+                pomodoro_break_done_job,
+                when=timedelta(minutes=5),
+                data={'user_id': user_id},
+                name=f"pomo_break_{user_id}"
+            )
+            await query.edit_message_text(
+                text=f"☕ *Descanso de 5 min iniciado.* A las {end_time.strftime('%H:%M')} te llamo de vuelta.",
+                parse_mode='Markdown'
+            )
+        elif data.startswith("pomo_stop_"):
+            await query.edit_message_text(
+                text="🛑 *Sesión terminada.* Buen trabajo, Jefe. Descansa.",
+                parse_mode='Markdown'
+            )
+    except Exception as e:
+        logger.error(f"Error en callback Pomodoro: {e}")
+
+async def pomodoro_break_done_job(context: ContextTypes.DEFAULT_TYPE):
+    """Avisa cuando termina el descanso de 5 min."""
+    user_id = context.job.data['user_id']
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🍅 Iniciar Pomodoro (25 min)", callback_data=f"pomo_repeat_25_{user_id}"),
+        InlineKeyboardButton("🛑 Terminar", callback_data=f"pomo_stop_{user_id}")
+    ]])
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="⏰ *¡Descanso terminado!* ¿Seguimos, Jefe?",
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
 
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Configura el briefing matutino. Uso: /briefing HH:MM o /briefing off"""
@@ -707,12 +932,15 @@ async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
             else:
                 habitos_str = "sin hábitos registrados"
 
+            pomodoro_count, pomodoro_mins = db.get_pomodoro_count_since(user_id, since_date)
+
             prompt_resumen = (
                 f"Eres F.R.I.D.A.Y. dando el resumen semanal del domingo. "
                 f"Usa SOLO texto plano, sin asteriscos, sin negritas, sin emojis, sin guiones. "
                 f"Tono motivacional y directo. Máximo 150 palabras. "
                 f"Tareas completadas esta semana: {tareas_str}. "
                 f"Progreso en hábitos: {habitos_str}. "
+                f"Sesiones Pomodoro esta semana: {pomodoro_count} sesiones ({pomodoro_mins} minutos totales de trabajo enfocado). "
                 f"Cierra con una frase motivadora breve para la semana que empieza."
             )
             model = genai.GenerativeModel('gemini-2.5-flash')
@@ -758,10 +986,13 @@ def main():
     # Comandos y Manejadores
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("briefing", briefing_command))
+    application.add_handler(CommandHandler("foco", foco_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_pdf))
+    application.add_handler(CallbackQueryHandler(handle_reminder_callback, pattern=r'^(snooze_|done_)'))
+    application.add_handler(CallbackQueryHandler(handle_pomodoro_callback, pattern=r'^pomo_'))
 
     # JobQueue: Revisar recordatorios cada 10 segundos
     application.job_queue.run_repeating(check_reminders_job, interval=10, first=5)

@@ -78,6 +78,28 @@ def init_db():
             UNIQUE(habit_id, logged_date)
         )
     ''')
+    # Watchlist (libros, películas, series)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS watchlist (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            title TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'movie',
+            status TEXT NOT NULL DEFAULT 'pending',
+            notes TEXT DEFAULT '',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+    ''')
+    # Sesiones Pomodoro
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 25,
+            completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -142,6 +164,14 @@ def update_reminder_next_run(reminder_id, next_remind_at):
     conn = get_conn()
     c = conn.cursor()
     c.execute("UPDATE reminders SET remind_at = %s WHERE id = %s", (next_remind_at, reminder_id))
+    conn.commit()
+    conn.close()
+
+def update_reminders_status_pending(reminder_id):
+    """Reactiva un recordatorio a 'pending' (usado al snooze para que vuelva a dispararse)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE reminders SET status = 'pending' WHERE id = %s", (reminder_id,))
     conn.commit()
     conn.close()
 
@@ -402,6 +432,91 @@ def get_habit_weekly_summary(user_id):
     rows = c.fetchall()
     conn.close()
     return rows  # [(name, days_completed), ...]
+
+# ─── WATCHLIST ──────────────────────────────────────────────────────────────────
+
+def add_to_watchlist(user_id, title, media_type):
+    """Agrega un ítem a la watchlist. media_type: 'book', 'movie' o 'series'."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO watchlist (user_id, title, type) VALUES (%s, %s, %s) RETURNING id",
+        (user_id, title, media_type)
+    )
+    item_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return item_id
+
+def list_watchlist(user_id, media_type=None, status=None):
+    """Lista ítems de la watchlist con filtros opcionales."""
+    conn = get_conn()
+    c = conn.cursor()
+    query = "SELECT id, title, type, status, notes FROM watchlist WHERE user_id = %s"
+    params = [user_id]
+    if media_type:
+        query += " AND type = %s"
+        params.append(media_type)
+    if status:
+        query += " AND status = %s"
+        params.append(status)
+    query += " ORDER BY added_at DESC"
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, title, type, status, notes), ...]
+
+def update_watchlist_item(item_id, user_id, status, notes=''):
+    """Actualiza el estado de un ítem de la watchlist."""
+    from datetime import datetime
+    conn = get_conn()
+    c = conn.cursor()
+    completed_at = datetime.now() if status == 'done' else None
+    c.execute(
+        "UPDATE watchlist SET status = %s, notes = %s, completed_at = %s WHERE id = %s AND user_id = %s",
+        (status, notes, completed_at, item_id, user_id)
+    )
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def delete_from_watchlist(item_id, user_id):
+    """Elimina un ítem de la watchlist."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM watchlist WHERE id = %s AND user_id = %s", (item_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+# ─── POMODORO ───────────────────────────────────────────────────────────────────
+
+def add_pomodoro_session(user_id, duration_minutes):
+    """Registra una sesión Pomodoro completada."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO pomodoro_sessions (user_id, duration_minutes) VALUES (%s, %s) RETURNING id",
+        (user_id, duration_minutes)
+    )
+    session_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return session_id
+
+def get_pomodoro_count_since(user_id, since_date):
+    """Total de sesiones Pomodoro completadas desde una fecha."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*), COALESCE(SUM(duration_minutes), 0) FROM pomodoro_sessions WHERE user_id = %s AND completed_at >= %s",
+        (user_id, since_date)
+    )
+    row = c.fetchone()
+    conn.close()
+    return row  # (count, total_minutes)
 
 # Inicializar la base de datos al importar este módulo
 init_db()
