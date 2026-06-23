@@ -132,6 +132,81 @@ def modify_reminder_recurrence(reminder_id: int, new_recurrence_minutes: float) 
             return f"Listo. El recordatorio ID {reminder_id} ahora solo se ejecutará una vez más y no se repetirá."
     return f"No encontré un recordatorio activo con ID {reminder_id} en los registros."
 
+# ─── HERRAMIENTAS DE MEMORIA ──────────────────────────────────────────────────────────
+
+def remember_fact(key: str, value: str) -> str:
+    """Guarda un dato importante sobre el usuario en la memoria persistente para recordarlo en el futuro.
+    Ejemplos: remember_fact('mascota', 'Rocky, perro labrador'), remember_fact('cumpleanos', '15 de marzo'),
+    remember_fact('trabajo', 'ingeniero de software'), remember_fact('ciudad', 'Guadalajara').
+    Úsala siempre que el usuario mencione datos personales relevantes que debes recordar a largo plazo."""
+    user_id = current_user_id.get()
+    db.save_memory(user_id, key.lower().strip(), value.strip())
+    return f"Memorizado, Jefe: '{key}' = '{value}'. Lo recordaré en futuras conversaciones."
+
+def recall_facts() -> str:
+    """Recupera todos los datos que has memorizado sobre el usuario.
+    Úsala cuando necesites contexto personal del usuario o cuando te pida qué recuerdas de él."""
+    user_id = current_user_id.get()
+    facts = db.get_all_memory(user_id)
+    if not facts:
+        return "Mi memoria personal sobre ti está vacía, Jefe. Cuéntame cosas importantes y las guardaré."
+    lines = [f"- {k}: {v}" for k, v in facts]
+    return "Lo que tengo memorizado sobre ti:\n" + "\n".join(lines)
+
+def forget_fact(key: str) -> str:
+    """Elimina un dato específico de la memoria del usuario. Úsala cuando el usuario pida que olvides algo o cuando un dato ya no sea válido."""
+    user_id = current_user_id.get()
+    success = db.delete_memory(user_id, key.lower().strip())
+    if success:
+        return f"Dato '{key}' eliminado de mi memoria, Jefe."
+    return f"No tenía ningún dato llamado '{key}' en mis registros."
+
+# ─── HERRAMIENTAS DE HÁBITOS ─────────────────────────────────────────────────────────
+
+def add_habit(name: str) -> str:
+    """Crea un nuevo hábito diario para rastrear. Úsala cuando el usuario quiera registrar un hábito como 'hacer ejercicio', 'beber agua', 'leer 30 minutos', etc."""
+    user_id = current_user_id.get()
+    habit_id = db.add_habit(user_id, name.strip())
+    return f"Hábito '{name}' registrado con ID {habit_id}. Cada día que lo completes, dímelo y lo anoto."
+
+def list_habits() -> str:
+    """Muestra todos los hábitos del usuario con su racha actual y si ya lo completó hoy.
+    Úsala cuando el usuario pregunte por sus hábitos, su progreso o su racha."""
+    user_id = current_user_id.get()
+    habits = db.list_habits(user_id)
+    if not habits:
+        return "No tienes hábitos registrados aún, Jefe. Díme cuáles quieres rastrear."
+    lines = []
+    for h_id, name, done_today, streak in habits:
+        done_str = "✅ Hecho hoy" if done_today else "⏳ Pendiente hoy"
+        streak_str = f"🔥 {streak} días de racha" if streak > 0 else "Sin racha aún"
+        lines.append(f"ID {h_id}: {name} | {done_str} | {streak_str}")
+    return "Tus hábitos:\n" + "\n".join(lines)
+
+def complete_habit(habit_id: int) -> str:
+    """Marca un hábito como completado hoy usando su ID. Úsala cuando el usuario diga que ya hizo uno de sus hábitos.
+    Si no sabe el ID, usa list_habits primero."""
+    user_id = current_user_id.get()
+    success = db.log_habit(habit_id, user_id)
+    if success:
+        # Obtener la racha actualizada para feedback motivacional
+        streak = db.get_habit_streak(habit_id)
+        if streak >= 7:
+            return f"🔥 ¡Hábito ID {habit_id} completado! Llevas {streak} días seguidos, Jefe. Imparable."
+        elif streak >= 3:
+            return f"✅ Hábito ID {habit_id} completado. Racha de {streak} días y contando."
+        else:
+            return f"✅ Hábito ID {habit_id} marcado como completado hoy."
+    return f"El hábito ID {habit_id} ya estaba registrado como completado hoy."
+
+def delete_habit(habit_id: int) -> str:
+    """Elimina un hábito y todo su historial. Úsala cuando el usuario quiera dejar de rastrear un hábito."""
+    user_id = current_user_id.get()
+    success = db.delete_habit(habit_id, user_id)
+    if success:
+        return f"Hábito ID {habit_id} y su historial eliminados del sistema."
+    return f"No encontré un hábito con ID {habit_id} en los registros."
+
 def search_web(query: str) -> str:
     """Busca en internet en tiempo real para obtener información actualizada. Úsalo SIEMPRE que te pregunten sobre noticias recientes, precios actuales de monedas, clima actual, fechas de eventos futuros o cualquier información que pueda cambiar con el tiempo. NUNCA inventes información reciente."""
     try:
@@ -236,15 +311,17 @@ def get_weather(location: str) -> str:
     except Exception as e:
         logger.error(f"Error obteniendo clima: {e}")
         return f"No pude obtener el clima para '{location}'. Error: {e}"
-from google_tools import read_gmail, draft_email, list_events, create_event
+from google_tools import read_gmail, draft_email, send_email, list_events, create_event
 
 # Herramientas a proporcionar al modelo
 tools = [
     add_new_task, get_tasks, mark_task_done,
     schedule_reminder, list_reminders, cancel_reminder, modify_reminder_recurrence,
+    remember_fact, recall_facts, forget_fact,
+    add_habit, list_habits, complete_habit, delete_habit,
     search_web, generate_image_url, get_youtube_transcript, scrape_website,
     get_current_datetime, get_weather,
-    read_gmail, draft_email, list_events, create_event
+    read_gmail, draft_email, send_email, list_events, create_event
 ]
 
 # Diccionario para guardar el contexto de los chats por ID de usuario
@@ -267,15 +344,22 @@ def get_chat_session(user_id):
             
         bound_tools = [make_bound(t) for t in tools]
         
+        # Cargar memoria persistente del usuario para inyectarla en el contexto
+        memory_facts = db.get_all_memory(user_id)
+        memory_context = ""
+        if memory_facts:
+            facts_str = "\n".join([f"  - {k}: {v}" for k, v in memory_facts])
+            memory_context = f"\n\nMEMORIA PERSONAL DEL JEFE (datos que ya sabes sobre él, úsalos naturalmente en la conversación):\n{facts_str}"
+        
         model = genai.GenerativeModel('gemini-2.5-flash', tools=bound_tools)
         chat_sessions[user_id] = model.start_chat(
             enable_automatic_function_calling=True,
             history=[
                 {
                     "role": "user",
-                    "parts": ["""Eres F.R.I.D.A.Y., el asistente personal del Jefe. Tu tono es casual, directo y confiado, como un co-piloto que sabe lo que hace. Llámalo 'Jefe' o 'Señor'. Nunca seas robóticamente formal. Ve al grano siempre.
+                    "parts": [f"""Eres F.R.I.D.A.Y., el asistente personal del Jefe. Tu tono es casual, directo y confiado, como un co-piloto que sabe lo que hace. Llámalo 'Jefe' o 'Señor'. Nunca seas robóticamente formal. Ve al grano siempre.
 
-CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
+CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, memoria persistente de datos del usuario, rastreo de hábitos con racha, acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
 
 REGLAS DE HERRAMIENTAS:
 - Para CLIMA o TEMPERATURA: usa SIEMPRE `get_weather` primero. Nunca uses search_web para el clima.
@@ -283,14 +367,17 @@ REGLAS DE HERRAMIENTAS:
 - Para NOTICIAS, PRECIOS, EVENTOS o cualquier dato reciente: usa `search_web`.
 - Para DEPORTES en vivo: usa `search_web` primero. Si es insuficiente, usa `scrape_website` en espn.com.mx o marca.com.
 - Puedes usar hasta 3 herramientas en cadena si la información anterior fue insuficiente. No entres en bucles.
-- Si una herramienta falla y ya intentaste alternativas, admitílo brevemente y ofrece una alternativa manual.
+- Si una herramienta falla y ya intentaste alternativas, admítelo brevemente y ofrece una alternativa manual.
+- Para CORREOS: usa `draft_email` si el usuario dice 'redacta', 'escribe' o 'borra'. Usa `send_email` SOLO si el usuario dice explícitamente 'envía' o confirma enviar.
+- Para DATOS PERSONALES del usuario: usa `remember_fact` para guardar lo que te cuente. Usa `recall_facts` si necesitas recordar algo de él.
+- Para HÁBITOS: usa `list_habits` para mostrar el progreso, `complete_habit` cuando diga que lo hizo, `add_habit` para nuevos y `delete_habit` para eliminar.
 
 CALIDAD DE RESPUESTA:
 - Usa tu conocimiento para ENRIQUECER los datos que devuelven las herramientas. No solo los copies: interprétalos.
-- Si el clima indica lluvia fuerte, súíerele que lleve paraguas. Si las noticias son preocupantes, comentálas.
+- Si el clima indica lluvia fuerte, suígele que lleve paraguas. Si las noticias son preocupantes, coméntalas.
 - Nunca menciones que recibiste un audio, imagen o archivo. Respóndelos directamente.
-- Siente libre de tener opinión, hacer comentarios inteligentes y anticipar lo que el Jefe necesita saber."""
-                    ]
+- Si el usuario te menciona algo personal (nombre de un familiar, un proyecto, una preferencia), guárdalo automáticamente con `remember_fact`.
+- Siéntete libre de tener opinión, hacer comentarios inteligentes y anticipar lo que el Jefe necesita saber.{memory_context}"""]
                 },
                 {
                     "role": "model",
@@ -592,6 +679,77 @@ async def send_morning_briefing(context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
 
+async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
+    """Envía el resumen semanal cada domingo a las 9 AM (UTC-6)."""
+    from datetime import timezone, timedelta
+    now_mx = datetime.now(timezone(timedelta(hours=-6)))
+
+    # Solo ejecutar los domingos a las 9:00 AM (hora México)
+    if now_mx.weekday() != 6 or now_mx.hour != 9 or now_mx.minute != 0:
+        return
+
+    users = db.get_all_briefings()  # Reutilizamos la lista de usuarios con briefing
+    if not users:
+        return
+
+    logger.info(f"[WEEKLY] Generando resumen semanal para {len(users)} usuarios")
+    since_date = (now_mx - timedelta(days=7)).strftime('%Y-%m-%d')
+
+    for user_id, _, _, _ in users:
+        texto_resumen = None
+        try:
+            tareas_completadas = db.get_completed_tasks_since(user_id, since_date)
+            tareas_str = ", ".join(tareas_completadas) if tareas_completadas else "ninguna esta semana"
+
+            habitos_semana = db.get_habit_weekly_summary(user_id)
+            if habitos_semana:
+                habitos_str = ", ".join([f"{name}: {days}/7 días" for name, days in habitos_semana])
+            else:
+                habitos_str = "sin hábitos registrados"
+
+            prompt_resumen = (
+                f"Eres F.R.I.D.A.Y. dando el resumen semanal del domingo. "
+                f"Usa SOLO texto plano, sin asteriscos, sin negritas, sin emojis, sin guiones. "
+                f"Tono motivacional y directo. Máximo 150 palabras. "
+                f"Tareas completadas esta semana: {tareas_str}. "
+                f"Progreso en hábitos: {habitos_str}. "
+                f"Cierra con una frase motivadora breve para la semana que empieza."
+            )
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            response = await model.generate_content_async(prompt_resumen)
+            texto_resumen = response.text
+
+            texto_limpio = clean_for_tts(texto_resumen)
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                temp_path = f.name
+
+            try:
+                communicate = edge_tts.Communicate(texto_limpio, "es-MX-NuriaNeural")
+                await communicate.save(temp_path)
+            except Exception as e_tts:
+                logger.warning(f"[WEEKLY] edge-tts falló: {e_tts}. Usando gTTS...")
+                tts = gTTS(text=texto_limpio, lang='es', tld='com.mx')
+                tts.save(temp_path)
+
+            with open(temp_path, 'rb') as audio:
+                await context.bot.send_voice(
+                    chat_id=user_id, voice=audio,
+                    caption="📊 Resumen Semanal de F.R.I.D.A.Y."
+                )
+            os.remove(temp_path)
+            logger.info(f"[WEEKLY] Resumen enviado a {user_id}")
+
+        except Exception as e:
+            logger.error(f"[WEEKLY] Error para usuario {user_id}: {e}")
+            if texto_resumen:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"📊 Resumen Semanal F.R.I.D.A.Y.\n\n{texto_resumen}\n\n(Audio no disponible)"
+                    )
+                except:
+                    pass
+
 def main():
     """Inicia el bot."""
 
@@ -609,8 +767,10 @@ def main():
     application.job_queue.run_repeating(check_reminders_job, interval=10, first=5)
     # JobQueue: Revisar briefings cada 60 segundos (con margen de 1 minuto)
     application.job_queue.run_repeating(send_morning_briefing, interval=60, first=10)
+    # JobQueue: Revisar resumen semanal cada 60 segundos (se auto-filtra a domingos 9 AM)
+    application.job_queue.run_repeating(send_weekly_summary, interval=60, first=15)
 
-    logger.info("Iniciando a F.R.I.D.A.Y. con soporte de Voz, PDF, Búsqueda Web, BD, Alarmas y Briefing Matutino...")
+    logger.info("Iniciando a F.R.I.D.A.Y. con Memoria Persistente, Hábitos, Correo Real, Resumen Semanal...")
     
     # Detectar si estamos en Render (Render siempre inyecta la variable PORT)
     port = os.environ.get("PORT")

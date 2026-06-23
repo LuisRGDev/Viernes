@@ -49,6 +49,35 @@ def init_db():
             token_json TEXT NOT NULL
         )
     ''')
+    # Memoria persistente del usuario
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS memory (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, key)
+        )
+    ''')
+    # Hábitos diarios
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS habits (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS habit_logs (
+            id SERIAL PRIMARY KEY,
+            habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL,
+            logged_date DATE NOT NULL,
+            UNIQUE(habit_id, logged_date)
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -209,6 +238,170 @@ def get_google_token(user_id):
     if row:
         return row[0]
     return None
+
+# ─── MEMORIA PERSISTENTE ───────────────────────────────────────────────────────
+
+def save_memory(user_id, key, value):
+    """Guarda o actualiza un dato en la memoria del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO memory (user_id, key, value, updated_at)
+           VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+           ON CONFLICT (user_id, key) DO UPDATE
+           SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP""",
+        (user_id, key, value)
+    )
+    conn.commit()
+    conn.close()
+
+def get_all_memory(user_id):
+    """Devuelve todos los datos memorizados del usuario como lista de (key, value)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT key, value FROM memory WHERE user_id = %s ORDER BY key", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_memory(user_id, key):
+    """Elimina un dato de la memoria del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM memory WHERE user_id = %s AND key = %s", (user_id, key))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+# ─── HÁBITOS ──────────────────────────────────────────────────────────────────
+
+def add_habit(user_id, name):
+    """Crea un nuevo hábito. Devuelve su ID."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("INSERT INTO habits (user_id, name) VALUES (%s, %s) RETURNING id", (user_id, name))
+    habit_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return habit_id
+
+def delete_habit(habit_id, user_id):
+    """Elimina un hábito y sus registros. Devuelve True si existía."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM habits WHERE id = %s AND user_id = %s", (habit_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def log_habit(habit_id, user_id):
+    """Marca un hábito como completado hoy. Devuelve True si fue nuevo (no duplicado)."""
+    from datetime import date
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "INSERT INTO habit_logs (habit_id, user_id, logged_date) VALUES (%s, %s, %s)",
+            (habit_id, user_id, date.today().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        return False  # Ya estaba registrado hoy
+
+def get_habit_streak(habit_id):
+    """Calcula los días consecutivos completados hasta hoy (racha)."""
+    from datetime import date, timedelta
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT logged_date FROM habit_logs WHERE habit_id = %s ORDER BY logged_date DESC",
+        (habit_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    if not rows:
+        return 0
+    streak = 0
+    check_date = date.today()
+    for (logged_date,) in rows:
+        if logged_date == check_date:
+            streak += 1
+            check_date -= timedelta(days=1)
+        elif logged_date == check_date - timedelta(days=1):
+            # Permitir que la racha incluya ayer si hoy aún no se ha registrado
+            streak += 1
+            check_date = logged_date - timedelta(days=1)
+        else:
+            break
+    return streak
+
+def list_habits(user_id):
+    """Lista los hábitos del usuario con su racha y si ya se completaron hoy."""
+    from datetime import date
+    today = date.today().isoformat()
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT h.id, h.name,
+               EXISTS(
+                   SELECT 1 FROM habit_logs hl
+                   WHERE hl.habit_id = h.id AND hl.logged_date = %s
+               ) AS done_today
+        FROM habits h
+        WHERE h.user_id = %s
+        ORDER BY h.created_at
+        """,
+        (today, user_id)
+    )
+    rows = c.fetchall()
+    conn.close()
+    result = []
+    for habit_id, name, done_today in rows:
+        streak = get_habit_streak(habit_id)
+        result.append((habit_id, name, done_today, streak))
+    return result
+
+# ─── RESUMEN SEMANAL ──────────────────────────────────────────────────────────
+
+def get_completed_tasks_since(user_id, since_date):
+    """Devuelve tareas completadas desde una fecha dada (formato 'YYYY-MM-DD')."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT description FROM tasks WHERE user_id = %s AND status = 'completed' AND created_at >= %s",
+        (user_id, since_date)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def get_habit_weekly_summary(user_id):
+    """Devuelve nombre del hábito y cuántos días lo completó esta semana (últimos 7 días)."""
+    from datetime import date, timedelta
+    since = (date.today() - timedelta(days=6)).isoformat()
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT h.name, COUNT(hl.id) AS days_completed
+        FROM habits h
+        LEFT JOIN habit_logs hl ON hl.habit_id = h.id AND hl.logged_date >= %s
+        WHERE h.user_id = %s
+        GROUP BY h.id, h.name
+        ORDER BY h.created_at
+        """,
+        (since, user_id)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(name, days_completed), ...]
 
 # Inicializar la base de datos al importar este módulo
 init_db()

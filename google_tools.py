@@ -8,6 +8,7 @@ import db
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/calendar'
 ]
 
@@ -81,6 +82,36 @@ def draft_email(to: str, subject: str, body: str) -> str:
         return f"Borrador creado exitosamente. Puedes revisarlo y enviarlo desde tu aplicación de Gmail. (ID del borrador: {draft['id']})"
     except Exception as e:
         return f"Error creando borrador: {e}"
+
+def send_email(to: str, subject: str, body: str) -> str:
+    """Envía un correo electrónico directamente desde Gmail del usuario, sin pasar por borradores.
+    Úsala SOLO cuando el usuario confirme explícitamente que quiere enviar el correo ahora.
+    Si el usuario solo dice 'redacta' o 'escribe', usa draft_email en su lugar.
+    """
+    import base64
+    from email.message import EmailMessage
+    from context import current_user_id
+
+    user_id = current_user_id.get()
+    creds = get_google_credentials(user_id)
+    if not creds:
+        return "No tienes vinculada tu cuenta de Google."
+
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        
+        message = EmailMessage()
+        message.set_content(body)
+        message['To'] = to
+        message['Subject'] = subject
+
+        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        sent = service.users().messages().send(
+            userId='me', body={'raw': encoded_message}
+        ).execute()
+        return f"Correo enviado exitosamente a {to}. ID del mensaje: {sent['id']}"
+    except Exception as e:
+        return f"Error enviando correo: {e}"
 
 def list_events(days: int = 1) -> str:
     """Obtiene los próximos eventos y reuniones de Google Calendar.
