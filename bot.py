@@ -364,6 +364,181 @@ def get_weather(location: str) -> str:
     except Exception as e:
         logger.error(f"Error obteniendo clima: {e}")
         return f"No pude obtener el clima para '{location}'. Error: {e}"
+
+# ─── PROYECTO IRON MAN — GYM TRACKER ──────────────────────────────────────────────────
+
+def start_workout(name: str = 'Entrenamiento') -> str:
+    """Ésasela cuando el usuario diga que va a entrenar, 'hoy toca X', 'empezamos el gym', 'iniciemos sesión'.
+    Inicia una nueva sesión de entrenamiento con el nombre dado (ej: 'Pecho', 'Piernas', 'Espalda y bíceps').
+    Automáticamente cierra cualquier sesión anterior que haya quedado abierta."""
+    user_id = current_user_id.get()
+    session_name = f"IRON MAN — {name.strip()}"
+    session_id = db.start_workout_session(user_id, session_name)
+    return (
+        f"🌐️ Sesión '{session_name}' iniciada (ID {session_id}). "
+        f"Cuando termines un ejercicio, díme algo como: 'Press banca: 4x10 a 80kg'. "
+        f"Cuando acabes todo, dime 'listo' o 'terminamos'."
+    )
+
+def log_exercise(exercise: str, sets: int, reps: int, weight_kg: float, notes: str = '') -> str:
+    """Ésasela cuando el usuario reporte un ejercicio completado con sus series, repeticiones y peso.
+    Interpreta frases como 'Press banca: 4x10 a 80kg' → exercise='Press banca', sets=4, reps=10, weight_kg=80.
+    Si el usuario no especifica series, asume 1. Si no especifica peso, usa 0.
+    Registra automáticamente bajo la sesión activa. Si no hay sesión, inicia una genérica primero."""
+    user_id = current_user_id.get()
+
+    # Asegurarse de que hay una sesión activa
+    session = db.get_active_session(user_id)
+    if not session:
+        session_id = db.start_workout_session(user_id, 'IRON MAN — Entrenamiento')
+    else:
+        session_id = session[0]
+
+    # Verificar PR anterior
+    pr_before = db.get_exercise_pr(user_id, exercise)
+    pr_weight = pr_before[0] if pr_before else 0
+
+    # Registrar cada serie
+    base_set = db.get_next_set_number(session_id, exercise)
+    for i in range(sets):
+        db.log_set(session_id, user_id, exercise, base_set + i, reps, weight_kg, notes)
+
+    # Generar respuesta con detención de PR
+    pr_msg = ""
+    if weight_kg > pr_weight and pr_weight > 0:
+        pr_msg = f" \ud83c� **¡NUEVO RÉCORD en {exercise}!** Antes: {pr_weight} kg → Ahora: {weight_kg} kg. ¡Así se hace, Jefe!"
+    elif weight_kg > pr_weight and pr_weight == 0:
+        pr_msg = f" (Primer registro de {exercise} en el sistema.)"
+
+    set_label = "serie" if sets == 1 else "series"
+    return f"✅ Anotado: {exercise} — {sets} {set_label} de {reps} reps a {weight_kg} kg.{pr_msg}"
+
+def end_workout(notes: str = '') -> str:
+    """Ésasela cuando el usuario diga que terminó de entrenar: 'listo', 'terminamos', 'eso fue todo', 'fin'.
+    Cierra la sesión activa y muestra el resumen completo del entrenamiento."""
+    user_id = current_user_id.get()
+    session = db.get_active_session(user_id)
+    if not session:
+        return "No hay ninguna sesión de entrenamiento activa, Jefe."
+
+    session_id, session_name, started_at = session
+    db.end_workout_session(session_id, notes)
+
+    sets = db.get_session_sets(session_id)
+    if not sets:
+        return f"💪 Sesión '{session_name}' cerrada. No se registraron ejercicios."
+
+    # Agrupar por ejercicio
+    from collections import defaultdict
+    ejercicios = defaultdict(list)
+    for ex, set_num, reps, weight, _ in sets:
+        ejercicios[ex].append((reps, weight))
+
+    total_series = len(sets)
+    total_reps = sum(r for ex, s in ejercicios.items() for r, w in s)
+    summary_lines = []
+    for ex, series in ejercicios.items():
+        detalles = ", ".join([f"{r} reps @ {w} kg" for r, w in series])
+        summary_lines.append(f"  • {ex}: {detalles}")
+
+    summary = "\n".join(summary_lines)
+    return (
+        f"💪 **Sesión completada: {session_name}**\n\n"
+        f"{summary}\n\n"
+        f"Total: {total_series} series | {total_reps} reps. ¡Buen trabajo, Jefe!"
+    )
+
+def get_current_workout() -> str:
+    """Ésasela cuando el usuario pregunte qué lleva anotado en la sesión actual, o quiera ver el resumen de lo que ya hizo hoy."""
+    user_id = current_user_id.get()
+    session = db.get_active_session(user_id)
+    if not session:
+        return "No hay sesión activa, Jefe. Di 'empezamos' para iniciar una."
+
+    session_id, session_name, started_at = session
+    sets = db.get_session_sets(session_id)
+    if not sets:
+        return f"Sesión '{session_name}' activa pero sin ejercicios registrados aún. ¡A trabajar!"
+
+    from collections import defaultdict
+    ejercicios = defaultdict(list)
+    for ex, set_num, reps, weight, _ in sets:
+        ejercicios[ex].append((reps, weight))
+
+    lines = []
+    for ex, series in ejercicios.items():
+        detalles = ", ".join([f"{r}x{w}kg" for r, w in series])
+        lines.append(f"  • {ex}: {detalles}")
+
+    return f"Lo que llevas en '{session_name}':\n" + "\n".join(lines)
+
+def get_last_workout() -> str:
+    """Ésasela cuando el usuario pregunte qué hizo en su último entrenamiento, quiera repetir la rutina anterior, o comparar su progreso."""
+    user_id = current_user_id.get()
+    session, sets = db.get_last_session(user_id)
+    if not session:
+        return "No hay entrenamientos registrados aún, Jefe. ¡Este será el primero!"
+
+    _, name, started_at, ended_at, notes = session
+    if not sets:
+        return f"Tu última sesión fue '{name}' el {str(started_at)[:10]}, pero no se registraron ejercicios."
+
+    from collections import defaultdict
+    ejercicios = defaultdict(list)
+    for ex, set_num, reps, weight in sets:
+        ejercicios[ex].append((reps, weight))
+
+    lines = []
+    for ex, series in ejercicios.items():
+        detalles = ", ".join([f"{r} reps @ {w} kg" for r, w in series])
+        lines.append(f"  • {ex}: {detalles}")
+
+    return (
+        f"🏋️ Último entrenamiento: **{name}** ({str(started_at)[:10]})\n"
+        + "\n".join(lines)
+    )
+
+def get_workout_history(exercise: str, days: int = 30) -> str:
+    """Ésasela cuando el usuario pregunte cómo ha evolucionado en un ejercicio, o quiera ver su progreso histórico.
+    Devuelve el historial de series/reps/peso de los últimos N días para ese ejercicio."""
+    user_id = current_user_id.get()
+    history = db.get_exercise_history(user_id, exercise, days)
+    if not history:
+        return f"No hay registros de '{exercise}' en los últimos {days} días, Jefe."
+
+    from itertools import groupby
+    lines = []
+    for date, group in groupby(history, key=lambda x: x[0]):
+        series_del_dia = list(group)
+        max_weight = max(w for _, _, _, w in series_del_dia)
+        total_reps = sum(r for _, _, r, _ in series_del_dia)
+        lines.append(f"  {str(date)[:10]}: {len(series_del_dia)} series | {total_reps} reps | máx {max_weight} kg")
+
+    # Calcular tendencia de peso máximo
+    first_max = max(w for _, _, _, w in history[:3]) if len(history) >= 3 else None
+    last_max = max(w for _, _, _, w in history[-3:]) if len(history) >= 3 else None
+    tendencia = ""
+    if first_max and last_max and last_max != first_max:
+        diff = last_max - first_max
+        tendencia = f"\n\nTendencia: {'\ud83d\udcc8 +' if diff > 0 else '\ud83d\udcc9 '}{diff:.1f} kg en {days} días."
+
+    return f"Historial de **{exercise}** (últimos {days} días):\n" + "\n".join(lines) + tendencia
+
+def get_personal_records() -> str:
+    """Ésasela cuando el usuario pregunte cuál es su récord en un ejercicio, o quiera ver todos sus PRs.
+    Devuelve el máximo peso registrado por ejercicio en toda la historia del usuario."""
+    user_id = current_user_id.get()
+    records = db.get_personal_records(user_id)
+    if not records:
+        return "Aún no tienes récords registrados, Jefe. ¡Empieza tu primera sesión!"
+
+    lines = []
+    for exercise, weight, reps, logged_at in records:
+        fecha = str(logged_at)[:10] if logged_at else '?'
+        lines.append(f"  🌟 {exercise}: **{weight} kg** x {reps} reps ({fecha})")
+
+    return "Tus Records Personales (PRs):\n" + "\n".join(lines)
+
 from google_tools import read_gmail, draft_email, send_email, list_events, create_event
 
 # Herramientas a proporcionar al modelo
@@ -373,6 +548,8 @@ tools = [
     remember_fact, recall_facts, forget_fact,
     add_habit, list_habits, complete_habit, delete_habit,
     add_to_watchlist, list_watchlist, update_watchlist_item, remove_from_watchlist,
+    start_workout, log_exercise, end_workout, get_current_workout,
+    get_last_workout, get_workout_history, get_personal_records,
     search_web, generate_image_url, get_youtube_transcript, scrape_website,
     get_current_datetime, get_weather,
     read_gmail, draft_email, send_email, list_events, create_event
@@ -413,7 +590,7 @@ def get_chat_session(user_id):
                     "role": "user",
                     "parts": [f"""Eres F.R.I.D.A.Y., el asistente personal del Jefe. Tu tono es casual, directo y confiado, como un co-piloto que sabe lo que hace. Llámalo 'Jefe' o 'Señor'. Nunca seas robóticamente formal. Ve al grano siempre.
 
-CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, memoria persistente, rastreo de hábitos, watchlist de libros/películas/series, acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
+CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, memoria persistente, rastreo de hábitos, watchlist de libros/películas/series, tracker de entrenamiento en el gym (Proyecto IRON MAN), acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
 
 REGLAS DE HERRAMIENTAS:
 - Para CLIMA o TEMPERATURA: usa SIEMPRE `get_weather` primero. Nunca uses search_web para el clima.
@@ -426,6 +603,7 @@ REGLAS DE HERRAMIENTAS:
 - Para DATOS PERSONALES del usuario: usa `remember_fact` para guardar lo que te cuente. Usa `recall_facts` si necesitas recordar algo de él.
 - Para HÁBITOS: usa `list_habits` para mostrar el progreso, `complete_habit` cuando diga que lo hizo, `add_habit` para nuevos y `delete_habit` para eliminar.
 - Para WATCHLIST: usa `add_to_watchlist` para agregar contenido, `list_watchlist` para ver la lista, `update_watchlist_item` para marcar como visto/leído, `remove_from_watchlist` para eliminar. Cuando el usuario pida recomendaciones basadas en su historial, combina `list_watchlist` con `search_web`.
+- Para GYM / PROYECTO IRON MAN: usa `start_workout` cuando el Jefe diga que va a entrenar. Usa `log_exercise` para registrar cada ejercicio (interpreta 'Press banca: 4x10 a 80kg' correctamente). Usa `end_workout` cuando termine. Usa `get_personal_records` para PRs, `get_workout_history` para progreso, `get_last_workout` para ver el último entreno, `get_current_workout` para el resumen de la sesión activa.
 
 CALIDAD DE RESPUESTA:
 - Usa tu conocimiento para ENRIQUECER los datos que devuelven las herramientas. No solo los copies: interprétalos.
@@ -934,13 +1112,20 @@ async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
 
             pomodoro_count, pomodoro_mins = db.get_pomodoro_count_since(user_id, since_date)
 
+            gym_sessions, gym_sets, gym_reps = db.get_weekly_workout_summary(user_id, since_date)
+            gym_str = (
+                f"{gym_sessions} sesiones de gym, {gym_sets} series, {gym_reps} repeticiones totales"
+                if gym_sessions > 0 else "sin entrenamientos esta semana"
+            )
+
             prompt_resumen = (
                 f"Eres F.R.I.D.A.Y. dando el resumen semanal del domingo. "
                 f"Usa SOLO texto plano, sin asteriscos, sin negritas, sin emojis, sin guiones. "
-                f"Tono motivacional y directo. Máximo 150 palabras. "
+                f"Tono motivacional y directo. Maximo 170 palabras. "
                 f"Tareas completadas esta semana: {tareas_str}. "
-                f"Progreso en hábitos: {habitos_str}. "
+                f"Progreso en habitos: {habitos_str}. "
                 f"Sesiones Pomodoro esta semana: {pomodoro_count} sesiones ({pomodoro_mins} minutos totales de trabajo enfocado). "
+                f"Gym (Proyecto IRON MAN): {gym_str}. "
                 f"Cierra con una frase motivadora breve para la semana que empieza."
             )
             model = genai.GenerativeModel('gemini-2.5-flash')
@@ -1001,7 +1186,7 @@ def main():
     # JobQueue: Revisar resumen semanal cada 60 segundos (se auto-filtra a domingos 9 AM)
     application.job_queue.run_repeating(send_weekly_summary, interval=60, first=15)
 
-    logger.info("Iniciando a F.R.I.D.A.Y. con Memoria Persistente, Hábitos, Correo Real, Resumen Semanal...")
+    logger.info("Iniciando F.R.I.D.A.Y. — Memoria | Hábitos | Correo Real | Resumen Semanal | Watchlist | Pomodoro | IRON MAN Gym Tracker")
     
     # Detectar si estamos en Render (Render siempre inyecta la variable PORT)
     port = os.environ.get("PORT")

@@ -100,6 +100,31 @@ def init_db():
             completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Proyecto IRON MAN — Sesiones de entrenamiento
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS workout_sessions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            name TEXT NOT NULL DEFAULT 'Entrenamiento',
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMP,
+            notes TEXT DEFAULT ''
+        )
+    ''')
+    # Sets individuales por ejercicio
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS workout_sets (
+            id SERIAL PRIMARY KEY,
+            session_id INTEGER NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL,
+            exercise TEXT NOT NULL,
+            set_number INTEGER NOT NULL DEFAULT 1,
+            reps INTEGER NOT NULL,
+            weight_kg REAL NOT NULL,
+            logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT DEFAULT ''
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -517,6 +542,193 @@ def get_pomodoro_count_since(user_id, since_date):
     row = c.fetchone()
     conn.close()
     return row  # (count, total_minutes)
+
+# ─── PROYECTO IRON MAN — GYM TRACKER ──────────────────────────────────────────────────
+
+def start_workout_session(user_id, name):
+    """Inicia una nueva sesión de entrenamiento. Devuelve el session_id."""
+    conn = get_conn()
+    c = conn.cursor()
+    # Cerrar cualquier sesión abierta sin cerrar
+    c.execute(
+        "UPDATE workout_sessions SET ended_at = NOW(), notes = 'Cerrada automáticamente' "
+        "WHERE user_id = %s AND ended_at IS NULL",
+        (user_id,)
+    )
+    c.execute(
+        "INSERT INTO workout_sessions (user_id, name) VALUES (%s, %s) RETURNING id",
+        (user_id, name)
+    )
+    session_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return session_id
+
+def get_active_session(user_id):
+    """Devuelve la sesión activa (sin ended_at) o None."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, name, started_at FROM workout_sessions WHERE user_id = %s AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        (user_id,)
+    )
+    row = c.fetchone()
+    conn.close()
+    return row  # (id, name, started_at) o None
+
+def end_workout_session(session_id, notes=''):
+    """Cierra una sesión de entrenamiento."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE workout_sessions SET ended_at = NOW(), notes = %s WHERE id = %s",
+        (notes, session_id)
+    )
+    conn.commit()
+    conn.close()
+
+def log_set(session_id, user_id, exercise, set_number, reps, weight_kg, notes=''):
+    """Registra una serie individual de un ejercicio."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO workout_sets (session_id, user_id, exercise, set_number, reps, weight_kg, notes) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (session_id, user_id, exercise.strip(), set_number, reps, weight_kg, notes)
+    )
+    set_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return set_id
+
+def get_session_sets(session_id):
+    """Devuelve todos los sets de una sesión agrupados por ejercicio."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT exercise, set_number, reps, weight_kg, notes FROM workout_sets "
+        "WHERE session_id = %s ORDER BY logged_at",
+        (session_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(exercise, set_number, reps, weight_kg, notes), ...]
+
+def get_next_set_number(session_id, exercise):
+    """Devuelve el siguiente número de serie para un ejercicio en una sesión."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM workout_sets WHERE session_id = %s AND LOWER(exercise) = LOWER(%s)",
+        (session_id, exercise)
+    )
+    count = c.fetchone()[0]
+    conn.close()
+    return count + 1
+
+def get_exercise_pr(user_id, exercise):
+    """Devuelve el peso máximo (PR) registrado para un ejercicio específico."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT MAX(weight_kg), reps, logged_at FROM workout_sets "
+        "WHERE user_id = %s AND LOWER(exercise) = LOWER(%s) AND weight_kg = ("
+        "  SELECT MAX(weight_kg) FROM workout_sets WHERE user_id = %s AND LOWER(exercise) = LOWER(%s)"
+        ") ORDER BY logged_at DESC LIMIT 1",
+        (user_id, exercise, user_id, exercise)
+    )
+    row = c.fetchone()
+    conn.close()
+    return row  # (max_weight, reps, logged_at) o None
+
+def get_personal_records(user_id):
+    """Devuelve el PR (máximo peso) por ejercicio para todos los ejercicios del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT ws.exercise, ws.weight_kg, ws.reps, ws.logged_at
+        FROM workout_sets ws
+        INNER JOIN (
+            SELECT LOWER(exercise) AS ex_lower, MAX(weight_kg) AS max_weight
+            FROM workout_sets
+            WHERE user_id = %s
+            GROUP BY LOWER(exercise)
+        ) pr ON LOWER(ws.exercise) = pr.ex_lower AND ws.weight_kg = pr.max_weight
+        WHERE ws.user_id = %s
+        ORDER BY ws.logged_at DESC
+        """,
+        (user_id, user_id)
+    )
+    rows = c.fetchall()
+    conn.close()
+    # Deduplicar por ejercicio (quedarse con el primero de cada uno)
+    seen = set()
+    result = []
+    for exercise, weight, reps, logged_at in rows:
+        key = exercise.lower()
+        if key not in seen:
+            seen.add(key)
+            result.append((exercise, weight, reps, logged_at))
+    return result  # [(exercise, weight_kg, reps, logged_at), ...]
+
+def get_exercise_history(user_id, exercise, days=30):
+    """Historial de un ejercicio: fecha, serie, reps, peso en los últimos N días."""
+    from datetime import datetime, timedelta
+    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT ws.logged_at::DATE, ws.set_number, ws.reps, ws.weight_kg
+        FROM workout_sets ws
+        WHERE ws.user_id = %s AND LOWER(ws.exercise) = LOWER(%s) AND ws.logged_at >= %s
+        ORDER BY ws.logged_at
+        """,
+        (user_id, exercise, since)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(date, set_number, reps, weight_kg), ...]
+
+def get_last_session(user_id):
+    """Devuelve la última sesión cerrada con sus sets."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, name, started_at, ended_at, notes FROM workout_sessions "
+        "WHERE user_id = %s AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1",
+        (user_id,)
+    )
+    session = c.fetchone()
+    if not session:
+        conn.close()
+        return None, []
+    session_id = session[0]
+    c.execute(
+        "SELECT exercise, set_number, reps, weight_kg FROM workout_sets WHERE session_id = %s ORDER BY logged_at",
+        (session_id,)
+    )
+    sets = c.fetchall()
+    conn.close()
+    return session, sets  # (id, name, started_at, ended_at, notes), [(exercise, set_num, reps, weight), ...]
+
+def get_weekly_workout_summary(user_id, since_date):
+    """Cuenta sesiones y series completadas en la semana."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM workout_sessions WHERE user_id = %s AND ended_at IS NOT NULL AND started_at >= %s",
+        (user_id, since_date)
+    )
+    session_count = c.fetchone()[0]
+    c.execute(
+        "SELECT COUNT(*), COALESCE(SUM(reps), 0) FROM workout_sets WHERE user_id = %s AND logged_at >= %s",
+        (user_id, since_date)
+    )
+    sets_count, total_reps = c.fetchone()
+    conn.close()
+    return session_count, sets_count, total_reps  # sesiones, series, reps totales
 
 # Inicializar la base de datos al importar este módulo
 init_db()
