@@ -125,6 +125,51 @@ def init_db():
             notes TEXT DEFAULT ''
         )
     ''')
+    # Alertas por condición
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS alerts (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            description TEXT NOT NULL,
+            condition_prompt TEXT NOT NULL,
+            check_interval_min INTEGER NOT NULL DEFAULT 5,
+            last_checked TIMESTAMP,
+            triggered BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Notas rápidas
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS notes (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            content TEXT NOT NULL,
+            tags TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Medicamentos
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS medications (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            name TEXT NOT NULL,
+            dose TEXT NOT NULL DEFAULT '1 dosis',
+            frequency_hours INTEGER NOT NULL DEFAULT 24,
+            reminder_time TEXT NOT NULL DEFAULT '08:00',
+            active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS medication_logs (
+            id SERIAL PRIMARY KEY,
+            med_id INTEGER NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL,
+            taken_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            skipped BOOLEAN DEFAULT FALSE
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -732,3 +777,228 @@ def get_weekly_workout_summary(user_id, since_date):
 
 # Inicializar la base de datos al importar este módulo
 init_db()
+
+
+# ─── ALERTAS POR CONDICIÓN ─────────────────────────────────────────────────────────────────
+
+def add_alert(user_id, description, condition_prompt, check_interval_min=5):
+    """Crea una nueva alerta de condición."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO alerts (user_id, description, condition_prompt, check_interval_min) VALUES (%s, %s, %s, %s) RETURNING id",
+        (user_id, description, condition_prompt, check_interval_min)
+    )
+    alert_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return alert_id
+
+def list_alerts(user_id):
+    """Lista las alertas activas (no disparadas) del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, description, condition_prompt, check_interval_min, last_checked FROM alerts WHERE user_id = %s AND triggered = FALSE ORDER BY created_at",
+        (user_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, description, condition_prompt, interval, last_checked), ...]
+
+def get_pending_alerts():
+    """Devuelve alertas que deben ser revisadas ahora (no disparadas y cuyo intervalo ya pasó)."""
+    from datetime import datetime, timedelta
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id, user_id, description, condition_prompt, check_interval_min
+        FROM alerts
+        WHERE triggered = FALSE
+          AND (last_checked IS NULL OR last_checked + (check_interval_min * INTERVAL '1 minute') <= NOW())
+        """
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, user_id, description, condition_prompt, interval), ...]
+
+def update_alert_last_checked(alert_id):
+    """Actualiza el timestamp de última verificación."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE alerts SET last_checked = NOW() WHERE id = %s", (alert_id,))
+    conn.commit()
+    conn.close()
+
+def mark_alert_triggered(alert_id):
+    """Marca una alerta como disparada (ya notificada)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE alerts SET triggered = TRUE, last_checked = NOW() WHERE id = %s", (alert_id,))
+    conn.commit()
+    conn.close()
+
+def delete_alert(alert_id, user_id):
+    """Elimina una alerta por ID."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM alerts WHERE id = %s AND user_id = %s", (alert_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+# ─── NOTAS RÁPIDAS ────────────────────────────────────────────────────────────────────
+
+def add_note(user_id, content, tags=''):
+    """Guarda una nota rápida de texto libre."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO notes (user_id, content, tags) VALUES (%s, %s, %s) RETURNING id",
+        (user_id, content.strip(), tags.strip())
+    )
+    note_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return note_id
+
+def search_notes(user_id, query):
+    """Busca notas por contenido (búsqueda case-insensitive)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, content, tags, created_at FROM notes WHERE user_id = %s AND content ILIKE %s ORDER BY created_at DESC",
+        (user_id, f'%{query}%')
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, content, tags, created_at), ...]
+
+def list_recent_notes_db(user_id, limit=10):
+    """Devuelve las últimas N notas del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, content, tags, created_at FROM notes WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+        (user_id, limit)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_note(note_id, user_id):
+    """Elimina una nota por ID."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM notes WHERE id = %s AND user_id = %s", (note_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+# ─── MEDICAMENTOS ────────────────────────────────────────────────────────────────────
+
+def add_medication(user_id, name, dose, frequency_hours, reminder_time):
+    """Registra un nuevo medicamento con su horario de toma."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO medications (user_id, name, dose, frequency_hours, reminder_time) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+        (user_id, name.strip(), dose.strip(), frequency_hours, reminder_time)
+    )
+    med_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return med_id
+
+def list_medications(user_id):
+    """Lista los medicamentos activos del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, name, dose, frequency_hours, reminder_time FROM medications WHERE user_id = %s AND active = TRUE ORDER BY created_at",
+        (user_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, name, dose, freq_hours, reminder_time), ...]
+
+def get_due_medications(now_time_str):
+    """Devuelve medicamentos activos cuya hora de recordatorio coincide con la hora actual (HH:MM)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, user_id, name, dose FROM medications WHERE active = TRUE AND reminder_time = %s",
+        (now_time_str,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, user_id, name, dose), ...]
+
+def log_medication_taken(med_id, user_id):
+    """Registra que el usuario tomó el medicamento."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO medication_logs (med_id, user_id, skipped) VALUES (%s, %s, FALSE)",
+        (med_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+
+def log_medication_skipped(med_id, user_id):
+    """Registra que el usuario omitió el medicamento."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO medication_logs (med_id, user_id, skipped) VALUES (%s, %s, TRUE)",
+        (med_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+
+def get_medication_adherence(med_id, user_id, days=30):
+    """Calcula el porcentaje de días tomado correctamente en los últimos N días."""
+    from datetime import datetime, timedelta
+    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM medication_logs WHERE med_id = %s AND user_id = %s AND skipped = FALSE AND taken_at >= %s",
+        (med_id, user_id, since)
+    )
+    taken = c.fetchone()[0]
+    c.execute(
+        "SELECT COUNT(*) FROM medication_logs WHERE med_id = %s AND user_id = %s AND taken_at >= %s",
+        (med_id, user_id, since)
+    )
+    total = c.fetchone()[0]
+    conn.close()
+    pct = round((taken / days) * 100) if days > 0 else 0
+    return taken, total, pct  # dias_tomado, total_registros, porcentaje
+
+def delete_medication(med_id, user_id):
+    """Desactiva un medicamento (soft delete)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE medications SET active = FALSE WHERE id = %s AND user_id = %s", (med_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def get_medication_weekly_stats(user_id, since_date):
+    """Total de tomas registradas esta semana."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM medication_logs WHERE user_id = %s AND skipped = FALSE AND taken_at >= %s",
+        (user_id, since_date)
+    )
+    taken = c.fetchone()[0]
+    conn.close()
+    return taken
