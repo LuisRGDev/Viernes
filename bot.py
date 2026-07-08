@@ -539,6 +539,128 @@ def get_personal_records() -> str:
 
     return "Tus Records Personales (PRs):\n" + "\n".join(lines)
 
+# ─── ALERTAS POR CONDICIÓN ────────────────────────────────────────────────────
+
+def set_alert(description: str, condition_prompt: str, check_interval_min: int = 5) -> str:
+    """Ésasela cuando el usuario pida que Friday monitoree algo y le avise cuando se cumpla.
+    Ejemplos: 'Avísame cuando el dólar pase de $19.50', 'Alerta si llueve mañana', 'Dime si el BTC baja de $60k'.
+    description: texto corto de la alerta (ej: 'Dólar > $19.50').
+    condition_prompt: instrucción en lenguaje natural que se evaluará periódicamente con search_web.
+      Debe ser una pregunta que se responda con SI o NO. Ejemplo: '¿El precio actual del dólar en México es mayor a $19.50 pesos? Busca el tipo de cambio actual y responde solo SI o NO.'
+    check_interval_min: cada cuántos minutos se revisa (default 5)."""
+    user_id = current_user_id.get()
+    alert_id = db.add_alert(user_id, description, condition_prompt, check_interval_min)
+    return f"📡 Alerta configurada (ID {alert_id}): '{description}'. Revisaré cada {check_interval_min} minutos y te aviso cuando se cumpla."
+
+def list_alerts_tool() -> str:
+    """Ésasela cuando el usuario pregunte qué alertas tiene activas."""
+    user_id = current_user_id.get()
+    alerts = db.list_alerts(user_id)
+    if not alerts:
+        return "No tienes alertas activas, Jefe."
+    lines = [f"ID {a[0]}: {a[1]} (revisión cada {a[3]} min)" for a in alerts]
+    return "Alertas activas:\n" + "\n".join(lines)
+
+def cancel_alert(alert_id: int) -> str:
+    """Ésasela cuando el usuario quiera cancelar o eliminar una alerta. Si no sabe el ID usa list_alerts_tool primero."""
+    user_id = current_user_id.get()
+    success = db.delete_alert(alert_id, user_id)
+    if success:
+        return f"Alerta ID {alert_id} cancelada."
+    return f"No encontré una alerta con ID {alert_id}."
+
+# ─── NOTAS RÁPIDAS ────────────────────────────────────────────────────────────────────
+
+def save_note(content: str, tags: str = '') -> str:
+    """Ésasela para guardar una nota de texto libre que el usuario quiere registrar.
+    Diferente a remember_fact (que guarda datos personales del usuario): save_note guarda información general,
+    ideas, instrucciones, contraseñas, links, pensamientos, etc.
+    Ejemplos: 'Anota: la wifi del trabajo es XYZ', 'Recuerda que Carlos dijo...', 'Idea: hacer una app de...'."""
+    user_id = current_user_id.get()
+    note_id = db.add_note(user_id, content, tags)
+    return f"📝 Nota guardada (ID {note_id})."
+
+def search_notes_tool(query: str) -> str:
+    """Ésasela cuando el usuario pregunte si anotó algo, busque una nota por tema o palabra clave.
+    Busca en el contenido completo de todas las notas."""
+    user_id = current_user_id.get()
+    results = db.search_notes(user_id, query)
+    if not results:
+        return f"No encontré ninguna nota que contenga '{query}', Jefe."
+    lines = []
+    for n_id, content, tags, created_at in results:
+        fecha = str(created_at)[:10]
+        lines.append(f"ID {n_id} ({fecha}): {content}")
+    return f"Notas que contienen '{query}':\n" + "\n".join(lines)
+
+def list_recent_notes() -> str:
+    """Ésasela cuando el usuario pida ver sus últimas notas o quiera un listado de lo que tiene anotado."""
+    user_id = current_user_id.get()
+    notes = db.list_recent_notes_db(user_id, limit=10)
+    if not notes:
+        return "No tienes notas guardadas aún, Jefe."
+    lines = []
+    for n_id, content, tags, created_at in notes:
+        fecha = str(created_at)[:10]
+        preview = content[:80] + ('...' if len(content) > 80 else '')
+        lines.append(f"ID {n_id} ({fecha}): {preview}")
+    return "Últimas notas:\n" + "\n".join(lines)
+
+def delete_note_tool(note_id: int) -> str:
+    """Ésasela cuando el usuario quiera borrar una nota específica por ID."""
+    user_id = current_user_id.get()
+    success = db.delete_note(note_id, user_id)
+    if success:
+        return f"Nota ID {note_id} eliminada."
+    return f"No encontré la nota ID {note_id}."
+
+# ─── MEDICAMENTOS ────────────────────────────────────────────────────────────────────
+
+def add_medication(name: str, dose: str, reminder_time: str, frequency_hours: int = 24) -> str:
+    """Ésasela cuando el usuario registre un medicamento o suplemento que toma regularmente.
+    name: nombre del medicamento. dose: dosis (ej: '1 pastilla', '500mg').
+    reminder_time: hora del recordatorio en formato HH:MM (ej: '08:00').
+    frequency_hours: cada cuántas horas se toma (24 = diario, 12 = dos veces al día)."""
+    user_id = current_user_id.get()
+    med_id = db.add_medication(user_id, name, dose, frequency_hours, reminder_time)
+    return f"💊 Medicamento '{name}' registrado (ID {med_id}). Recordatorio diario a las {reminder_time}."
+
+def list_medications_tool() -> str:
+    """Ésasela cuando el usuario pregunte qué medicamentos tiene registrados."""
+    user_id = current_user_id.get()
+    meds = db.list_medications(user_id)
+    if not meds:
+        return "No tienes medicamentos registrados, Jefe."
+    lines = [f"ID {m[0]}: {m[1]} — {m[2]} a las {m[4]}" for m in meds]
+    return "💊 Medicamentos activos:\n" + "\n".join(lines)
+
+def log_medication(med_id: int, taken: bool = True) -> str:
+    """Ésasela cuando el usuario confirme que tomó (taken=True) u omitió (taken=False) un medicamento.
+    Si no sabe el ID, usa list_medications_tool primero."""
+    user_id = current_user_id.get()
+    if taken:
+        db.log_medication_taken(med_id, user_id)
+        return f"✅ Toma de medicamento ID {med_id} registrada. ¡Bien hecho, Jefe!"
+    else:
+        db.log_medication_skipped(med_id, user_id)
+        return f"❌ Omisión de medicamento ID {med_id} registrada."
+
+def get_medication_stats(med_id: int, days: int = 30) -> str:
+    """Ésasela cuando el usuario pregunte cuántos días ha tomado su medicamento o qué porcentaje de adherencia tiene."""
+    user_id = current_user_id.get()
+    meds = db.list_medications(user_id)
+    med_name = next((m[1] for m in meds if m[0] == med_id), f"Medicamento {med_id}")
+    taken, total, pct = db.get_medication_adherence(med_id, user_id, days)
+    return f"📊 {med_name} en los últimos {days} días: {taken} tomas registradas. Adherencia: {pct}%."
+
+def delete_medication_tool(med_id: int) -> str:
+    """Ésasela cuando el usuario ya no quiera rastrear un medicamento."""
+    user_id = current_user_id.get()
+    success = db.delete_medication(med_id, user_id)
+    if success:
+        return f"Medicamento ID {med_id} desactivado."
+    return f"No encontré el medicamento ID {med_id}."
+
 from google_tools import read_gmail, draft_email, send_email, list_events, create_event
 
 # Herramientas a proporcionar al modelo
@@ -550,6 +672,9 @@ tools = [
     add_to_watchlist, list_watchlist, update_watchlist_item, remove_from_watchlist,
     start_workout, log_exercise, end_workout, get_current_workout,
     get_last_workout, get_workout_history, get_personal_records,
+    set_alert, list_alerts_tool, cancel_alert,
+    save_note, search_notes_tool, list_recent_notes, delete_note_tool,
+    add_medication, list_medications_tool, log_medication, get_medication_stats, delete_medication_tool,
     search_web, generate_image_url, get_youtube_transcript, scrape_website,
     get_current_datetime, get_weather,
     read_gmail, draft_email, send_email, list_events, create_event
@@ -604,6 +729,9 @@ REGLAS DE HERRAMIENTAS:
 - Para HÁBITOS: usa `list_habits` para mostrar el progreso, `complete_habit` cuando diga que lo hizo, `add_habit` para nuevos y `delete_habit` para eliminar.
 - Para WATCHLIST: usa `add_to_watchlist` para agregar contenido, `list_watchlist` para ver la lista, `update_watchlist_item` para marcar como visto/leído, `remove_from_watchlist` para eliminar. Cuando el usuario pida recomendaciones basadas en su historial, combina `list_watchlist` con `search_web`.
 - Para GYM / PROYECTO IRON MAN: usa `start_workout` cuando el Jefe diga que va a entrenar. Usa `log_exercise` para registrar cada ejercicio (interpreta 'Press banca: 4x10 a 80kg' correctamente). Usa `end_workout` cuando termine. Usa `get_personal_records` para PRs, `get_workout_history` para progreso, `get_last_workout` para ver el último entreno, `get_current_workout` para el resumen de la sesión activa.
+- Para ALERTAS: usa `set_alert` cuando el usuario pida que lo avises cuando algo pase (precio, clima, etc.). Crea siempre un `condition_prompt` que sea una pregunta de SI/NO con instrucción de buscar en internet. Usa `list_alerts_tool` para ver alertas activas y `cancel_alert` para cancelarlas.
+- Para NOTAS: usa `save_note` para texto libre, ideas, contraseñas, instrucciones (diferente a `remember_fact` que es para datos personales del usuario). Usa `search_notes_tool` para buscar por contenido y `list_recent_notes` para ver las últimas.
+- Para MEDICAMENTOS: usa `add_medication` para registrar un medicamento con su hora de toma. Usa `log_medication` cuando el usuario confirme que lo tomó. Usa `get_medication_stats` para ver adherencia. Los recordatorios llegan automáticamente a la hora configurada.
 
 CALIDAD DE RESPUESTA:
 - Usa tu conocimiento para ENRIQUECER los datos que devuelven las herramientas. No solo los copies: interprétalos.
@@ -620,14 +748,92 @@ CALIDAD DE RESPUESTA:
         )
     return chat_sessions[user_id]
 
-def trim_chat_history(chat, max_exchanges=10):
+def trim_chat_history(chat, max_exchanges=30):
     """
-    Limita la memoria del bot para no gastar demasiados tokens.
-    Conserva los 2 primeros mensajes (System Prompt) y los últimos N intercambios.
+    Maneja la memoria del chat de forma inteligente:
+    - Conserva los 2 primeros mensajes (system prompt).
+    - Si el historial excede max_exchanges, genera un resumen comprimido
+      de los mensajes más viejos y lo inyecta como contexto.
+    - max_exchanges=30 permite sesiones largas como gym sin perder contexto.
     """
     max_msgs = max_exchanges * 2
-    if len(chat.history) > 2 + max_msgs:
+    if len(chat.history) <= 2 + max_msgs:
+        return  # No hace falta recortar
+
+    # Mensajes que se van a eliminar (excluyendo system prompt)
+    old_messages = chat.history[2:-(max_msgs)]
+
+    # Extraer texto relevante de los mensajes viejos para hacer resumen
+    summary_parts = []
+    for msg in old_messages:
+        try:
+            if msg.role == "user":
+                text_parts = [p.text for p in msg.parts if hasattr(p, 'text') and p.text]
+                if text_parts:
+                    summary_parts.append(f"Usuario: {text_parts[0][:150]}")
+            elif msg.role == "model":
+                text_parts = [p.text for p in msg.parts if hasattr(p, 'text') and p.text]
+                if text_parts:
+                    summary_parts.append(f"FRIDAY: {text_parts[0][:150]}")
+        except Exception:
+            continue  # Saltar mensajes con partes no textuales (function calls, etc.)
+
+    if summary_parts:
+        # Tomar los últimos 15 fragmentos relevantes para no perder contexto clave
+        summary_text = "\n".join(summary_parts[-15:])
+
+        # Crear mensajes de contexto resumido
+        from google.generativeai.types import content_types
+        context_msg = content_types.to_content(
+            {"role": "user", "parts": [
+                f"[CONTEXTO PREVIO DE ESTA CONVERSACIÓN — Resumen de mensajes anteriores "
+                f"que ya no están en el historial. Usa esta información para mantener coherencia]:\n"
+                f"{summary_text}\n[FIN DEL CONTEXTO PREVIO]"
+            ]}
+        )
+        context_response = content_types.to_content(
+            {"role": "model", "parts": [
+                "Entendido, tengo el contexto previo presente. Continúo asistiendo, Jefe."
+            ]}
+        )
+
+        # Reconstruir: system prompt + resumen + mensajes recientes
+        chat.history = chat.history[:2] + [context_msg, context_response] + chat.history[-max_msgs:]
+    else:
+        # Fallback: si no se pudo extraer resumen, cortar como antes
         chat.history = chat.history[:2] + chat.history[-max_msgs:]
+
+    logger.info(f"[MEMORY] Historial recortado. Tamaño actual: {len(chat.history)} mensajes.")
+
+def get_active_context(user_id):
+    """Genera un string de contexto con el estado activo del usuario para inyectar en cada mensaje."""
+    context_parts = []
+
+    # ¿Sesión de gym activa?
+    try:
+        session = db.get_active_session(user_id)
+        if session:
+            session_id, session_name, started_at = session
+            sets = db.get_session_sets(session_id)
+            exercises_done = []
+            if sets:
+                from collections import OrderedDict
+                seen = OrderedDict()
+                for s in sets:
+                    ex = s[0]
+                    if ex not in seen:
+                        seen[ex] = 0
+                    seen[ex] += 1
+                exercises_done = [f"{ex} ({count} series)" for ex, count in seen.items()]
+            ctx = (
+                f"[SESIÓN ACTIVA: {session_name} | "
+                f"Ejercicios registrados: {', '.join(exercises_done) if exercises_done else 'ninguno aún'}]"
+            )
+            context_parts.append(ctx)
+    except Exception as e:
+        logger.warning(f"Error obteniendo contexto activo: {e}")
+
+    return "\n".join(context_parts) if context_parts else ""
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /start"""
@@ -656,7 +862,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat = get_chat_session(user_id)
-        response = await chat.send_message_async(user_text)
+        
+        # Inyectar contexto activo (sesión de gym, etc.) de forma invisible
+        active_ctx = get_active_context(user_id)
+        if active_ctx:
+            enriched_text = f"{active_ctx}\n\n{user_text}"
+        else:
+            enriched_text = user_text
+        
+        response = await chat.send_message_async(enriched_text)
         trim_chat_history(chat)
         await update.message.reply_text(response.text)
     except Exception as e:
@@ -712,7 +926,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "data": bytes(voice_bytes)
         }
         
-        prompt = "Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
+        # Inyectar contexto activo en el prompt de voz
+        active_ctx = get_active_context(user_id)
+        ctx_prefix = f"{active_ctx}\n\n" if active_ctx else ""
+        prompt = f"{ctx_prefix}Responde directamente y al grano manteniendo tu personalidad casual de F.R.I.D.A.Y. IMPORTANTE: NO menciones que estás respondiendo a un audio o nota de voz."
         response = await chat.send_message_async([prompt, audio_part])
         trim_chat_history(chat)
         
