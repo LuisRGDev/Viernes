@@ -170,6 +170,41 @@ def init_db():
             skipped BOOLEAN DEFAULT FALSE
         )
     ''')
+    # ─── PROYECTO WALLET — Finanzas Personales ────────────────────────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'expense',
+            amount REAL NOT NULL,
+            category TEXT NOT NULL DEFAULT 'otro',
+            description TEXT DEFAULT '',
+            source TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS budgets (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            category TEXT NOT NULL,
+            monthly_limit REAL NOT NULL,
+            UNIQUE(user_id, category)
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS recurring_expenses (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            amount REAL NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            frequency TEXT NOT NULL DEFAULT 'monthly',
+            next_due DATE,
+            active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -1002,3 +1037,292 @@ def get_medication_weekly_stats(user_id, since_date):
     taken = c.fetchone()[0]
     conn.close()
     return taken
+
+
+# ─── PROYECTO WALLET — FINANZAS PERSONALES ─────────────────────────────────────────
+
+def add_transaction(user_id, tx_type, amount, category, description='', source=''):
+    """Registra una transacción (gasto o ingreso). Devuelve el ID."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO transactions (user_id, type, amount, category, description, source) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (user_id, tx_type, amount, category.lower().strip(), description.strip(), source.strip())
+    )
+    tx_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return tx_id
+
+def list_transactions_db(user_id, days=30, tx_type=None):
+    """Lista transacciones de los últimos N días, opcionalmente filtradas por tipo."""
+    from datetime import datetime, timedelta
+    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    conn = get_conn()
+    c = conn.cursor()
+    if tx_type:
+        c.execute(
+            "SELECT id, type, amount, category, description, source, created_at "
+            "FROM transactions WHERE user_id = %s AND type = %s AND created_at >= %s "
+            "ORDER BY created_at DESC",
+            (user_id, tx_type, since)
+        )
+    else:
+        c.execute(
+            "SELECT id, type, amount, category, description, source, created_at "
+            "FROM transactions WHERE user_id = %s AND created_at >= %s "
+            "ORDER BY created_at DESC",
+            (user_id, since)
+        )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, type, amount, category, description, source, created_at), ...]
+
+def delete_transaction_db(tx_id, user_id):
+    """Elimina una transacción. Devuelve True si existía."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM transactions WHERE id = %s AND user_id = %s", (tx_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def set_budget_db(user_id, category, monthly_limit):
+    """Establece o actualiza el presupuesto mensual de una categoría."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO budgets (user_id, category, monthly_limit)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (user_id, category) DO UPDATE
+           SET monthly_limit = EXCLUDED.monthly_limit""",
+        (user_id, category.lower().strip(), monthly_limit)
+    )
+    conn.commit()
+    conn.close()
+
+def list_budgets_db(user_id):
+    """Lista todos los presupuestos del usuario con el gasto actual del mes."""
+    from datetime import datetime
+    now = datetime.now()
+    month_start = now.strftime('%Y-%m-01')
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT b.category, b.monthly_limit,
+               COALESCE(SUM(t.amount), 0) AS spent
+        FROM budgets b
+        LEFT JOIN transactions t ON t.user_id = b.user_id
+            AND t.category = b.category
+            AND t.type = 'expense'
+            AND t.created_at >= %s
+        WHERE b.user_id = %s
+        GROUP BY b.category, b.monthly_limit
+        ORDER BY b.category
+        """,
+        (month_start, user_id)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(category, monthly_limit, spent), ...]
+
+def delete_budget_db(user_id, category):
+    """Elimina un presupuesto. Devuelve True si existía."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM budgets WHERE user_id = %s AND category = %s", (user_id, category.lower().strip()))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def get_budget_for_category(user_id, category):
+    """Obtiene el presupuesto y gasto actual de una categoría específica. Devuelve (limit, spent) o None."""
+    from datetime import datetime
+    month_start = datetime.now().strftime('%Y-%m-01')
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT monthly_limit FROM budgets WHERE user_id = %s AND category = %s",
+        (user_id, category.lower().strip())
+    )
+    budget_row = c.fetchone()
+    if not budget_row:
+        conn.close()
+        return None
+    monthly_limit = budget_row[0]
+    c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s AND category = %s AND type = 'expense' AND created_at >= %s",
+        (user_id, category.lower().strip(), month_start)
+    )
+    spent = c.fetchone()[0]
+    conn.close()
+    return (monthly_limit, spent)
+
+def add_recurring_expense_db(user_id, amount, category, description, frequency='monthly'):
+    """Registra un gasto recurrente. Devuelve el ID."""
+    from datetime import date, timedelta
+    # Calcular próxima fecha de vencimiento
+    today = date.today()
+    if frequency == 'weekly':
+        next_due = today + timedelta(weeks=1)
+    elif frequency == 'biweekly':
+        next_due = today + timedelta(weeks=2)
+    else:  # monthly
+        month = today.month + 1 if today.month < 12 else 1
+        year = today.year if today.month < 12 else today.year + 1
+        next_due = today.replace(year=year, month=month, day=min(today.day, 28))
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO recurring_expenses (user_id, amount, category, description, frequency, next_due) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (user_id, amount, category.lower().strip(), description.strip(), frequency, next_due)
+    )
+    rec_id = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return rec_id
+
+def list_recurring_expenses_db(user_id):
+    """Lista gastos recurrentes activos del usuario."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, amount, category, description, frequency, next_due "
+        "FROM recurring_expenses WHERE user_id = %s AND active = TRUE ORDER BY next_due",
+        (user_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows  # [(id, amount, category, description, frequency, next_due), ...]
+
+def delete_recurring_expense_db(expense_id, user_id):
+    """Desactiva un gasto recurrente. Devuelve True si existía."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE recurring_expenses SET active = FALSE WHERE id = %s AND user_id = %s", (expense_id, user_id))
+    changed = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+def get_monthly_summary(user_id, month=None, year=None):
+    """Resumen financiero del mes: ingresos, gastos, balance, desglose por categoría."""
+    from datetime import datetime
+    now = datetime.now()
+    if not month:
+        month = now.month
+    if not year:
+        year = now.year
+    month_start = f"{year}-{month:02d}-01"
+    if month == 12:
+        next_month_start = f"{year + 1}-01-01"
+    else:
+        next_month_start = f"{year}-{month + 1:02d}-01"
+
+    conn = get_conn()
+    c = conn.cursor()
+
+    # Total ingresos
+    c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s AND type = 'income' AND created_at >= %s AND created_at < %s",
+        (user_id, month_start, next_month_start)
+    )
+    total_income = c.fetchone()[0]
+
+    # Total gastos
+    c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s AND type = 'expense' AND created_at >= %s AND created_at < %s",
+        (user_id, month_start, next_month_start)
+    )
+    total_expenses = c.fetchone()[0]
+
+    # Desglose por categoría (solo gastos)
+    c.execute(
+        "SELECT category, SUM(amount) FROM transactions WHERE user_id = %s AND type = 'expense' AND created_at >= %s AND created_at < %s GROUP BY category ORDER BY SUM(amount) DESC",
+        (user_id, month_start, next_month_start)
+    )
+    categories = c.fetchall()
+
+    # Top 3 gastos individuales
+    c.execute(
+        "SELECT amount, category, description, created_at FROM transactions WHERE user_id = %s AND type = 'expense' AND created_at >= %s AND created_at < %s ORDER BY amount DESC LIMIT 3",
+        (user_id, month_start, next_month_start)
+    )
+    top_expenses = c.fetchall()
+
+    conn.close()
+    return {
+        'month': month,
+        'year': year,
+        'total_income': total_income,
+        'total_expenses': total_expenses,
+        'balance': total_income - total_expenses,
+        'categories': categories,  # [(category, total), ...]
+        'top_expenses': top_expenses  # [(amount, category, description, date), ...]
+    }
+
+def get_category_breakdown_db(user_id, month=None, year=None):
+    """Desglose detallado de gastos por categoría con comparación al mes anterior."""
+    from datetime import datetime
+    now = datetime.now()
+    if not month:
+        month = now.month
+    if not year:
+        year = now.year
+    month_start = f"{year}-{month:02d}-01"
+    if month == 12:
+        next_month_start = f"{year + 1}-01-01"
+    else:
+        next_month_start = f"{year}-{month + 1:02d}-01"
+
+    # Mes anterior
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    prev_month_start = f"{prev_year}-{prev_month:02d}-01"
+
+    conn = get_conn()
+    c = conn.cursor()
+
+    # Gastos del mes actual por categoría
+    c.execute(
+        "SELECT category, SUM(amount), COUNT(*) FROM transactions WHERE user_id = %s AND type = 'expense' AND created_at >= %s AND created_at < %s GROUP BY category ORDER BY SUM(amount) DESC",
+        (user_id, month_start, next_month_start)
+    )
+    current = c.fetchall()  # [(category, total, count), ...]
+
+    # Gastos del mes anterior por categoría
+    c.execute(
+        "SELECT category, SUM(amount) FROM transactions WHERE user_id = %s AND type = 'expense' AND created_at >= %s AND created_at < %s GROUP BY category",
+        (user_id, prev_month_start, month_start)
+    )
+    previous = {row[0]: row[1] for row in c.fetchall()}
+
+    conn.close()
+    return current, previous  # current: [(cat, total, count)], previous: {cat: total}
+
+def get_weekly_financial_summary(user_id, since_date):
+    """Resumen financiero de la semana para el reporte dominical."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s AND type = 'expense' AND created_at >= %s",
+        (user_id, since_date)
+    )
+    weekly_expenses = c.fetchone()[0]
+    c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = %s AND type = 'income' AND created_at >= %s",
+        (user_id, since_date)
+    )
+    weekly_income = c.fetchone()[0]
+    c.execute(
+        "SELECT COUNT(*) FROM transactions WHERE user_id = %s AND created_at >= %s",
+        (user_id, since_date)
+    )
+    tx_count = c.fetchone()[0]
+    conn.close()
+    return weekly_expenses, weekly_income, tx_count

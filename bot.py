@@ -661,6 +661,200 @@ def delete_medication_tool(med_id: int) -> str:
         return f"Medicamento ID {med_id} desactivado."
     return f"No encontré el medicamento ID {med_id}."
 
+# ─── PROYECTO WALLET — FINANZAS PERSONALES ─────────────────────────────────────────
+
+CATEGORY_EMOJIS = {
+    'comida': '🍔', 'transporte': '🚗', 'entretenimiento': '🎮',
+    'salud': '🏥', 'hogar': '🏠', 'educacion': '📚',
+    'ropa': '👕', 'tecnologia': '💻', 'otro': '📦'
+}
+
+def log_expense(amount: float, category: str, description: str = '') -> str:
+    """Registra un gasto del usuario. Interpreta frases como 'Gasté $200 en uber' → amount=200, category='transporte', description='Uber'.
+    Categorías válidas: comida, transporte, entretenimiento, salud, hogar, educacion, ropa, tecnologia, otro.
+    Si la descripción menciona comida/restaurante/café usa 'comida'. Si menciona uber/taxi/gasolina usa 'transporte'.
+    Si menciona cine/netflix/videojuegos usa 'entretenimiento'. Si menciona renta/luz/agua/internet usa 'hogar'.
+    Úsala SIEMPRE que el usuario diga que gastó, pagó o compró algo."""
+    user_id = current_user_id.get()
+    cat = category.lower().strip()
+    tx_id = db.add_transaction(user_id, 'expense', amount, cat, description)
+    emoji = CATEGORY_EMOJIS.get(cat, '📦')
+
+    # Verificar presupuesto
+    budget_info = db.get_budget_for_category(user_id, cat)
+    budget_msg = ""
+    if budget_info:
+        limit, spent = budget_info
+        spent += amount  # incluir este gasto
+        pct = (spent / limit) * 100 if limit > 0 else 0
+        budget_msg = f" Llevas ${spent:,.2f}/${limit:,.2f} de tu presupuesto de {cat} ({pct:.1f}%)."
+        if pct >= 100:
+            budget_msg += " ⚠️ ¡PRESUPUESTO EXCEDIDO!"
+        elif pct >= 80:
+            budget_msg += " ⚠️ ¡Cuidado, te acercas al límite!"
+
+    desc_str = f" ({description})" if description else ""
+    return f"✅ Gasto registrado (ID {tx_id}): ${amount:,.2f} en {emoji} {cat}{desc_str}.{budget_msg}"
+
+def log_income(amount: float, source: str, description: str = '') -> str:
+    """Registra un ingreso del usuario. Interpreta frases como 'Me pagaron $15,000 de nómina' → amount=15000, source='nómina'.
+    Úsala cuando el usuario diga que le pagaron, cobró, recibió dinero, o tuvo un ingreso."""
+    user_id = current_user_id.get()
+    tx_id = db.add_transaction(user_id, 'income', amount, 'ingreso', description, source)
+    src_str = f" de {source}" if source else ""
+    return f"💵 Ingreso registrado (ID {tx_id}): ${amount:,.2f}{src_str}. ¡Bien, Jefe!"
+
+def list_transactions(days: int = 30, transaction_type: str = '') -> str:
+    """Muestra las transacciones recientes del usuario. Filtra por tipo: 'expense' para gastos, 'income' para ingresos, vacío para todos.
+    Úsala cuando el usuario pregunte por sus gastos recientes, movimientos, o transacciones."""
+    user_id = current_user_id.get()
+    tx_type = transaction_type if transaction_type in ('expense', 'income') else None
+    txs = db.list_transactions_db(user_id, days, tx_type)
+    if not txs:
+        return f"No hay transacciones en los últimos {days} días, Jefe."
+    lines = []
+    for tx_id, tx_type_val, amount, cat, desc, source, created_at in txs[:15]:
+        fecha = str(created_at)[:10]
+        emoji = CATEGORY_EMOJIS.get(cat, '📦')
+        if tx_type_val == 'income':
+            src = f" ({source})" if source else ""
+            lines.append(f"ID {tx_id}: 💵 +${amount:,.2f}{src} — {fecha}")
+        else:
+            desc_str = f" ({desc})" if desc else ""
+            lines.append(f"ID {tx_id}: {emoji} -${amount:,.2f} {cat}{desc_str} — {fecha}")
+    return f"Transacciones (últimos {days} días):\n" + "\n".join(lines)
+
+def delete_transaction(transaction_id: int) -> str:
+    """Elimina una transacción errónea por su ID. Úsala cuando el usuario diga que registró algo mal o quiera borrar un gasto/ingreso."""
+    user_id = current_user_id.get()
+    success = db.delete_transaction_db(transaction_id, user_id)
+    if success:
+        return f"Transacción ID {transaction_id} eliminada."
+    return f"No encontré la transacción ID {transaction_id}."
+
+def set_budget(category: str, monthly_limit: float) -> str:
+    """Establece un presupuesto mensual para una categoría de gastos.
+    Categorías válidas: comida, transporte, entretenimiento, salud, hogar, educacion, ropa, tecnologia, otro.
+    Úsala cuando el usuario diga 'mi presupuesto de X es $Y' o 'quiero gastar máximo $Y en X al mes'."""
+    user_id = current_user_id.get()
+    cat = category.lower().strip()
+    emoji = CATEGORY_EMOJIS.get(cat, '📦')
+    db.set_budget_db(user_id, cat, monthly_limit)
+    return f"📊 Presupuesto establecido: {emoji} {cat} → ${monthly_limit:,.2f}/mes."
+
+def list_budgets() -> str:
+    """Muestra todos los presupuestos del usuario con su gasto actual vs. límite y porcentaje consumido.
+    Úsala cuando el usuario pregunte cómo va con sus presupuestos o quiera ver sus límites."""
+    user_id = current_user_id.get()
+    budgets = db.list_budgets_db(user_id)
+    if not budgets:
+        return "No tienes presupuestos configurados, Jefe. Dime tus límites por categoría."
+    lines = []
+    for cat, limit, spent in budgets:
+        emoji = CATEGORY_EMOJIS.get(cat, '📦')
+        pct = (spent / limit) * 100 if limit > 0 else 0
+        bar = '🟢' if pct < 60 else '🟡' if pct < 80 else '🔴'
+        lines.append(f"{bar} {emoji} {cat}: ${spent:,.2f}/${limit:,.2f} ({pct:.1f}%)")
+    return "Presupuestos del mes:\n" + "\n".join(lines)
+
+def delete_budget(category: str) -> str:
+    """Elimina un presupuesto mensual de una categoría. Úsala cuando el usuario ya no quiera rastrear el límite de una categoría."""
+    user_id = current_user_id.get()
+    success = db.delete_budget_db(user_id, category.lower().strip())
+    if success:
+        return f"Presupuesto de '{category}' eliminado."
+    return f"No tenías presupuesto para '{category}'."
+
+def add_recurring_expense(amount: float, category: str, description: str, frequency: str = 'monthly') -> str:
+    """Registra un gasto recurrente (renta, suscripciones, servicios).
+    frequency: 'weekly', 'biweekly' o 'monthly'. Úsala cuando el usuario mencione un gasto fijo periódico."""
+    user_id = current_user_id.get()
+    cat = category.lower().strip()
+    emoji = CATEGORY_EMOJIS.get(cat, '📦')
+    freq_labels = {'weekly': 'semanal', 'biweekly': 'quincenal', 'monthly': 'mensual'}
+    freq_label = freq_labels.get(frequency, frequency)
+    rec_id = db.add_recurring_expense_db(user_id, amount, cat, description, frequency)
+    return f"🔄 Gasto recurrente registrado (ID {rec_id}): {emoji} {description} — ${amount:,.2f} {freq_label}."
+
+def list_recurring_expenses() -> str:
+    """Muestra los gastos recurrentes activos del usuario. Úsala cuando pregunte por sus gastos fijos, suscripciones o compromisos mensuales."""
+    user_id = current_user_id.get()
+    recs = db.list_recurring_expenses_db(user_id)
+    if not recs:
+        return "No tienes gastos recurrentes registrados, Jefe."
+    lines = []
+    freq_labels = {'weekly': 'semanal', 'biweekly': 'quincenal', 'monthly': 'mensual'}
+    for rec_id, amount, cat, desc, freq, next_due in recs:
+        emoji = CATEGORY_EMOJIS.get(cat, '📦')
+        freq_label = freq_labels.get(freq, freq)
+        due_str = f" (próximo: {next_due})" if next_due else ""
+        lines.append(f"ID {rec_id}: {emoji} {desc} — ${amount:,.2f} {freq_label}{due_str}")
+    return "Gastos recurrentes:\n" + "\n".join(lines)
+
+def delete_recurring_expense(expense_id: int) -> str:
+    """Elimina un gasto recurrente. Úsala cuando el usuario cancele una suscripción o ya no tenga un gasto fijo."""
+    user_id = current_user_id.get()
+    success = db.delete_recurring_expense_db(expense_id, user_id)
+    if success:
+        return f"Gasto recurrente ID {expense_id} eliminado."
+    return f"No encontré el gasto recurrente ID {expense_id}."
+
+def get_financial_summary(month: int = 0, year: int = 0) -> str:
+    """Muestra el resumen financiero del mes: ingresos, gastos, balance, desglose por categoría y top gastos.
+    Si month y year son 0, usa el mes actual. Úsala cuando el usuario pregunte '¿cómo voy este mes?', 'resumen de gastos', o '¿cuánto he gastado?'."""
+    user_id = current_user_id.get()
+    m = month if month > 0 else None
+    y = year if year > 0 else None
+    summary = db.get_monthly_summary(user_id, m, y)
+
+    months_es = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+    month_name = months_es[summary['month']]
+
+    result = (
+        f"📊 Resumen financiero — {month_name} {summary['year']}:\n"
+        f"  💵 Ingresos: ${summary['total_income']:,.2f}\n"
+        f"  💸 Gastos: ${summary['total_expenses']:,.2f}\n"
+        f"  💰 Balance: ${summary['balance']:+,.2f}\n"
+    )
+
+    if summary['categories']:
+        result += "\nDesglose por categoría:\n"
+        for cat, total in summary['categories']:
+            emoji = CATEGORY_EMOJIS.get(cat, '📦')
+            result += f"  {emoji} {cat}: ${total:,.2f}\n"
+
+    if summary['top_expenses']:
+        result += "\nTop gastos:\n"
+        for amount, cat, desc, date in summary['top_expenses']:
+            desc_str = desc if desc else cat
+            result += f"  ${amount:,.2f} — {desc_str} ({str(date)[:10]})\n"
+
+    return result
+
+def get_category_breakdown(month: int = 0, year: int = 0) -> str:
+    """Desglose detallado por categoría con comparación al mes anterior.
+    Úsala cuando el usuario quiera análisis detallado de en qué categoría gasta más o si mejoró respecto al mes pasado."""
+    user_id = current_user_id.get()
+    m = month if month > 0 else None
+    y = year if year > 0 else None
+    current, previous = db.get_category_breakdown_db(user_id, m, y)
+    if not current:
+        return "No hay gastos registrados este mes, Jefe."
+
+    lines = []
+    for cat, total, count in current:
+        emoji = CATEGORY_EMOJIS.get(cat, '📦')
+        prev_total = previous.get(cat, 0)
+        if prev_total > 0:
+            diff = total - prev_total
+            trend = f" ({'📈 +' if diff > 0 else '📉 '}{diff:,.2f} vs. mes anterior)"
+        else:
+            trend = " (sin datos del mes anterior)"
+        lines.append(f"{emoji} {cat}: ${total:,.2f} ({count} transacciones){trend}")
+
+    return "Desglose por categoría:\n" + "\n".join(lines)
+
 from google_tools import read_gmail, draft_email, send_email, list_events, create_event
 
 # Herramientas a proporcionar al modelo
@@ -675,6 +869,10 @@ tools = [
     set_alert, list_alerts_tool, cancel_alert,
     save_note, search_notes_tool, list_recent_notes, delete_note_tool,
     add_medication, list_medications_tool, log_medication, get_medication_stats, delete_medication_tool,
+    log_expense, log_income, list_transactions, delete_transaction,
+    set_budget, list_budgets, delete_budget,
+    add_recurring_expense, list_recurring_expenses, delete_recurring_expense,
+    get_financial_summary, get_category_breakdown,
     search_web, generate_image_url, get_youtube_transcript, scrape_website,
     get_current_datetime, get_weather,
     read_gmail, draft_email, send_email, list_events, create_event
@@ -717,6 +915,13 @@ def get_chat_session(user_id):
 
 CAPACIDADES: Tienes base de datos de tareas, alarmas recurrentes, memoria persistente, rastreo de hábitos, watchlist de libros/películas/series, tracker de entrenamiento en el gym (Proyecto IRON MAN), acceso a internet, generación de imágenes, lectura de videos de YouTube, lectura de páginas web y pronóstico del clima.
 
+REGLAS DE MEMORIA (CRÍTICAS — SEGUIR SIEMPRE):
+- CADA MENSAJE del usuario incluye una sección [MEMORIA DEL JEFE: ...] con datos que ya sabes sobre él. ÚSALOS naturalmente. No preguntes cosas que ya están ahí.
+- Si el usuario menciona un nombre, proyecto, alias o referencia que NO reconoces y NO está en la sección [MEMORIA DEL JEFE], llama `recall_facts` ANTES de decir que no lo sabes. Solo si `recall_facts` tampoco tiene el dato, entonces pregunta.
+- NUNCA digas "No tengo información sobre X" sin antes haber llamado a `recall_facts`.
+- Si el usuario aclara qué es algo (ej: "IRON MAN es mi proyecto de gym", "Mila es mi novia", "el proyecto Phoenix es mi tesis"), SIEMPRE guárdalo automáticamente con `remember_fact` usando una key descriptiva (ej: remember_fact('proyecto_iron_man', 'Proyecto de gym/entrenamiento del Jefe'), remember_fact('novia', 'Mila')).
+- Cuando el usuario mencione datos personales nuevos (cumpleaños, nombre de familiar, trabajo, ciudad, preferencia), guárdalos con `remember_fact` SIN pedir confirmación.
+
 REGLAS DE HERRAMIENTAS:
 - Para CLIMA o TEMPERATURA: usa SIEMPRE `get_weather` primero. Nunca uses search_web para el clima.
 - Para FECHA u HORA actual: usa SIEMPRE `get_current_datetime`. Nunca asumas ni adivines la fecha.
@@ -732,12 +937,12 @@ REGLAS DE HERRAMIENTAS:
 - Para ALERTAS: usa `set_alert` cuando el usuario pida que lo avises cuando algo pase (precio, clima, etc.). Crea siempre un `condition_prompt` que sea una pregunta de SI/NO con instrucción de buscar en internet. Usa `list_alerts_tool` para ver alertas activas y `cancel_alert` para cancelarlas.
 - Para NOTAS: usa `save_note` para texto libre, ideas, contraseñas, instrucciones (diferente a `remember_fact` que es para datos personales del usuario). Usa `search_notes_tool` para buscar por contenido y `list_recent_notes` para ver las últimas.
 - Para MEDICAMENTOS: usa `add_medication` para registrar un medicamento con su hora de toma. Usa `log_medication` cuando el usuario confirme que lo tomó. Usa `get_medication_stats` para ver adherencia. Los recordatorios llegan automáticamente a la hora configurada.
+- Para FINANZAS / PROYECTO WALLET: usa `log_expense` cuando el usuario diga que gastó, pagó o compró algo. Interpreta frases como 'Gasté $200 en uber' → log_expense(200, 'transporte', 'Uber'). Usa `log_income` cuando diga que le pagaron, cobró o recibió dinero. Usa `set_budget` para establecer límites mensuales por categoría. Usa `get_financial_summary` para resúmenes del mes y `get_category_breakdown` para análisis detallado. Si un gasto supera el 80% del presupuesto de su categoría, avísale proactivamente. Usa `add_recurring_expense` para gastos fijos como renta, suscripciones, servicios. Categorías válidas: comida, transporte, entretenimiento, salud, hogar, educacion, ropa, tecnologia, otro.
 
 CALIDAD DE RESPUESTA:
 - Usa tu conocimiento para ENRIQUECER los datos que devuelven las herramientas. No solo los copies: interprétalos.
 - Si el clima indica lluvia fuerte, suígele que lleve paraguas. Si las noticias son preocupantes, coméntalas.
 - Nunca menciones que recibiste un audio, imagen o archivo. Respóndelos directamente.
-- Si el usuario te menciona algo personal (nombre de un familiar, un proyecto, una preferencia), guárdalo automáticamente con `remember_fact`.
 - Siéntete libre de tener opinión, hacer comentarios inteligentes y anticipar lo que el Jefe necesita saber.{memory_context}"""]
                 },
                 {
@@ -806,10 +1011,34 @@ def trim_chat_history(chat, max_exchanges=30):
     logger.info(f"[MEMORY] Historial recortado. Tamaño actual: {len(chat.history)} mensajes.")
 
 def get_active_context(user_id):
-    """Genera un string de contexto con el estado activo del usuario para inyectar en cada mensaje."""
+    """Genera un string de contexto con el estado activo del usuario para inyectar en cada mensaje.
+    Incluye: memoria persistente, hábitos activos y sesión de gym activa.
+    Esto garantiza que el modelo siempre tenga el contexto personal del usuario,
+    incluso después de que trim_chat_history recorte el historial."""
     context_parts = []
 
-    # ¿Sesión de gym activa?
+    # 1. Inyectar memoria persistente del usuario (datos personales, alias, proyectos)
+    try:
+        memory_facts = db.get_all_memory(user_id)
+        if memory_facts:
+            facts_str = ", ".join([f"{k}: {v}" for k, v in memory_facts])
+            context_parts.append(f"[MEMORIA DEL JEFE: {facts_str}]")
+    except Exception as e:
+        logger.warning(f"Error cargando memoria del usuario: {e}")
+
+    # 2. Inyectar hábitos activos con estado de hoy
+    try:
+        habits = db.list_habits(user_id)
+        if habits:
+            habits_str = ", ".join([
+                f"{name} ({'✅' if done else '⏳'}, racha {streak}d)"
+                for _, name, done, streak in habits[:8]  # Limitar a 8 para no saturar
+            ])
+            context_parts.append(f"[HÁBITOS HOY: {habits_str}]")
+    except Exception as e:
+        logger.warning(f"Error cargando hábitos: {e}")
+
+    # 3. ¿Sesión de gym activa?
     try:
         session = db.get_active_session(user_id)
         if session:
@@ -832,6 +1061,18 @@ def get_active_context(user_id):
             context_parts.append(ctx)
     except Exception as e:
         logger.warning(f"Error obteniendo contexto activo: {e}")
+
+    # 4. Resumen financiero rápido del mes (Proyecto WALLET)
+    try:
+        summary = db.get_monthly_summary(user_id)
+        if summary['total_expenses'] > 0 or summary['total_income'] > 0:
+            balance_str = f"${summary['balance']:+,.2f}"
+            context_parts.append(
+                f"[WALLET: Ingresos ${summary['total_income']:,.2f} | "
+                f"Gastos ${summary['total_expenses']:,.2f} | Balance {balance_str}]"
+            )
+    except Exception as e:
+        logger.warning(f"Error cargando contexto financiero: {e}")
 
     return "\n".join(context_parts) if context_parts else ""
 
@@ -1330,6 +1571,8 @@ async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
             pomodoro_count, pomodoro_mins = db.get_pomodoro_count_since(user_id, since_date)
 
             gym_sessions, gym_sets, gym_reps = db.get_weekly_workout_summary(user_id, since_date)
+
+            weekly_expenses, weekly_income, tx_count = db.get_weekly_financial_summary(user_id, since_date)
             gym_str = (
                 f"{gym_sessions} sesiones de gym, {gym_sets} series, {gym_reps} repeticiones totales"
                 if gym_sessions > 0 else "sin entrenamientos esta semana"
@@ -1343,6 +1586,7 @@ async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
                 f"Progreso en habitos: {habitos_str}. "
                 f"Sesiones Pomodoro esta semana: {pomodoro_count} sesiones ({pomodoro_mins} minutos totales de trabajo enfocado). "
                 f"Gym (Proyecto IRON MAN): {gym_str}. "
+                f"Finanzas (Proyecto WALLET): gastos de la semana ${weekly_expenses:,.2f}, ingresos ${weekly_income:,.2f} ({tx_count} transacciones). "
                 f"Cierra con una frase motivadora breve para la semana que empieza."
             )
             model = genai.GenerativeModel('gemini-2.5-flash')
